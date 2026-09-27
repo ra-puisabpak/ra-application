@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ra-application",
+  "main": "src/worker.ts",
+  "compatibility_date": "2025-09-27",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ra-application",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [{ "binding": "EVIDENCE", "bucket_name": "ra-application-evidence" }]
+}

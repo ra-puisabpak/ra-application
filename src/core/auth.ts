@@ -1,4 +1,4 @@
-import type { AppRole, Permission, PermissionRule, ApprovalStep } from './production';
+import type { AppRole, PermissionRule, ApprovalStep } from './production';
 
 export type AuthSession = { userId: string; username: string; roles: AppRole[]; issuedAt: string; expiresAt: string; };
 
