@@ -70,7 +70,7 @@ export default {
       return json({ data: rows.results, requestId: id });
     }
 
-    const taskRoute = url.pathname.match(/^\\/tasks\\/([a-f0-9-]+)$/);
+    const taskRoute = url.pathname.match(/^\/tasks\/([a-f0-9-]+)$/);
     if (taskRoute) {
       const task = await env.DB.prepare(`SELECT id, title, module, record_type, record_id, action, owner_id, due_date, status, priority, created_at, updated_at, completed_at
         FROM tasks WHERE id = ? AND owner_id = ?`).bind(taskRoute[1], actor.id).first<Record<string, unknown>>();
@@ -78,7 +78,7 @@ export default {
       return json({ data: task, requestId: id });
     }
 
-    const taskAction = url.pathname.match(/^\\/tasks\\/([a-f0-9-]+)\\/(start|complete|cancel)$/);
+    const taskAction = url.pathname.match(/^\/tasks\/([a-f0-9-]+)\\/(start|complete|cancel)$/);
     if (request.method === 'POST' && taskAction) {
       const task = await env.DB.prepare('SELECT id, status, owner_id FROM tasks WHERE id = ?').bind(taskAction[1]).first<{ id: string; status: string; owner_id: string }>();
       if (!task) return json({ error: { code: 'NOT_FOUND', message: 'Task not found' }, requestId: id }, 404);
