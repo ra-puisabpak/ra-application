@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/**/*.test.mjs",
+    "test": "rm -rf .test-build && tsc --outDir .test-build --noEmit false && node --test test/**/*.test.mjs",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "db:migrate:local": "wrangler d1 migrations apply ra-application --local",
