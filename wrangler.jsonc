@@ -8,7 +8,7 @@
     {
       "binding": "DB",
       "database_name": "ra-application",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "database_id": "19d30663-7eab-4ba6-aacb-ec8013566665",
       "migrations_dir": "migrations"
     }
   ],
