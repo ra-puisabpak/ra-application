@@ -17,6 +17,15 @@ const json = (value: unknown, status = 200): Response => new Response(JSON.strin
 const requestId = (request: Request): string => request.headers.get('cf-ray') ?? crypto.randomUUID();
 const actorRole = (actor: Actor): string => actor.roles[0]?.role ?? 'UNKNOWN';
 const requireRole = (actor: Actor, permitted: string[]): boolean => actor.roles.some((grant) => permitted.includes(grant.role));
+const isApiRoute = (pathname: string): boolean => [
+  '/auth/',
+  '/products',
+  '/evidence',
+  '/files/',
+  '/approvals/',
+  '/tasks',
+  '/dashboard',
+].some((prefix) => pathname === prefix || pathname.startsWith(prefix));
 
 const productFromRow = (row: Record<string, unknown>): Product => ({
   id: String(row.id), productCode: String(row.product_code), thaiName: String(row.thai_name),
@@ -58,22 +67,21 @@ export default {
     const id = requestId(request);
     if (request.method === 'GET' && url.pathname === '/health') return json({ ok: true, requestId: id });
 
-    // Static UI assets remain publicly renderable; application APIs below require Access identity.
-    // Explicitly map the site root to index.html so the production Worker never depends on
-    // implicit directory-index behavior of the Assets binding.
     if (env.ASSETS && (request.method === 'GET' || request.method === 'HEAD')) {
-      const apiPath = url.pathname.startsWith('/auth/')
-        || url.pathname.startsWith('/products')
-        || url.pathname.startsWith('/evidence')
-        || url.pathname.startsWith('/files/')
-        || url.pathname.startsWith('/approvals/')
-        || url.pathname.startsWith('/tasks')
-        || url.pathname.startsWith('/dashboard');
-      if (!apiPath) {
-        const assetRequest = url.pathname === '/'
-          ? new Request(new URL('/index.html', request.url), request)
-          : request;
-        return env.ASSETS.fetch(assetRequest);
+      if (!isApiRoute(url.pathname)) {
+        const assetUrl = url.pathname === '/' ? new URL('/index.html', request.url) : new URL(url.pathname, request.url);
+        const assetRequest = new Request(assetUrl, request);
+        try {
+          const asset = await env.ASSETS.fetch(assetRequest);
+          if (asset.status !== 404) return asset;
+        } catch (error) {
+          console.error('ASSET_FETCH_FAILED', { pathname: url.pathname, error });
+        }
+
+        if (url.pathname === '/') {
+          const rootIndex = new Request(new URL('/index.html', request.url), request);
+          return env.ASSETS.fetch(rootIndex);
+        }
       }
     }
 
@@ -115,7 +123,7 @@ export default {
       const productStates = await env.DB.prepare('SELECT state, COUNT(*) AS count FROM products GROUP BY state ORDER BY state').all();
       const taskStates = await env.DB.prepare('SELECT status, COUNT(*) AS count FROM tasks WHERE owner_id = ? GROUP BY status ORDER BY status').bind(actor.id).all();
       const evidenceStates = await env.DB.prepare('SELECT verification_status AS status, COUNT(*) AS count FROM evidence GROUP BY verification_status ORDER BY verification_status').all();
-      const pendingApprovals = await env.DB.prepare("SELECT COUNT(*) AS count FROM approval_steps WHERE status = 'PENDING' AND required_role IN (SELECT role FROM user_roles WHERE user_id = ? AND can_approve = 1)").bind(actor.id).first();
+      const pendingApprovals = await env.DB.prepare("SELECT COUNT(*) AS count FROM approval_steps WHERE status = 'PENDING' AND required_role IN (SELECT role FROM user_roles WHERE user_id = ? AND can_approve = 1)").bind(actor.id).first<{ count: number }>();
       return json({ data: {
         products: productStates.results,
         myTasks: taskStates.results,
@@ -170,7 +178,7 @@ export default {
       const product = await env.DB.prepare('SELECT id, revision, state FROM products WHERE id = ?').bind(submit[1]).first<{ id: string; revision: string; state: string }>();
       if (!product) return json({ error: { code: 'NOT_FOUND', message: 'Product not found' }, requestId: id }, 404);
       if (product.state !== 'DRAFT' && product.state !== 'RETURNED') return json({ error: { code: 'INVALID_STATE', message: 'Only DRAFT or RETURNED products can be submitted' }, requestId: id }, 409);
-      if (!await hasVerifiedEvidence(env, 'PRODUCT', product.id, product.revision)) return json({ error: { code: 'VERIFIED_EVIDENCE_REQUIRED', message: 'At least one verified evidence record is required' }, requestId: id }, 409);
+      if (!await hasVerifiedEvidence(env, 'PRODUCT', product.id, product.revision)) return json({ error: { code: 'VERIFIED_EVIDENCE_REQUIRED', message: 'At least one verified evidence record is required before submission' }, requestId: id }, 409);
       await env.DB.batch([
         env.DB.prepare("UPDATE products SET state = 'PENDING_APPROVAL', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(product.id),
         env.DB.prepare("INSERT INTO approval_steps (id, record_type, record_id, revision, sequence, required_role, status) VALUES (?, 'PRODUCT', ?, ?, 1, 'RA', 'PENDING')").bind(crypto.randomUUID(), product.id, product.revision),
@@ -184,7 +192,7 @@ export default {
       if (!requireRole(actor, ['RA', 'QA', 'QC', 'DCC', 'R&D'])) return json({ error: { code: 'FORBIDDEN', message: 'Evidence upload role required' }, requestId: id }, 403);
       const input = await body<EvidenceInput>(request);
       if (!input?.recordType || !input.recordId || !input.title?.trim() || !input.revision?.trim() || !input.contentType?.trim()) return json({ error: { code: 'VALIDATION_ERROR', message: 'recordType, recordId, title, revision and contentType are required' }, requestId: id }, 400);
-      if (input.recordType !== 'PRODUCT' || !await env.DB.prepare('SELECT id FROM products WHERE id = ?').bind(input.recordId).first()) return json({ error: { code: 'VALIDATION_ERROR', message: 'Evidence must reference an existing PRODUCT record' }, requestId: id }, 400);
+      if (input.recordType !== 'PRODUCT' || !await env.DB.prepare('SELECT id FROM products WHERE id = ?').bind(input.recordId).first()) return json({ error: { code: 'VALIDATION_ERROR', message: 'Only PRODUCT evidence records are supported' }, requestId: id }, 400);
       const evidenceId = crypto.randomUUID();
       const storageKey = `evidence/${input.recordType}/${input.recordId}/${evidenceId}`;
       await env.DB.batch([
@@ -229,7 +237,7 @@ export default {
         .bind(productId, product.revision).first<{ id: string; required_role: string; status: string; sequence: number; revision: string }>();
       if (!step) return json({ error: { code: 'APPROVAL_STEP_REQUIRED', message: 'No pending approval step exists' }, requestId: id }, 409);
       if (!actor.roles.some((grant) => grant.role === step.required_role && grant.canApprove)) return json({ error: { code: 'APPROVER_NOT_AUTHORIZED', message: 'Actor cannot decide this approval step' }, requestId: id }, 403);
-      if (!await hasVerifiedEvidence(env, 'PRODUCT', product.id, product.revision)) return json({ error: { code: 'VERIFIED_EVIDENCE_REQUIRED', message: 'Verified evidence is required at approval' }, requestId: id }, 409);
+      if (!await hasVerifiedEvidence(env, 'PRODUCT', product.id, product.revision)) return json({ error: { code: 'VERIFIED_EVIDENCE_REQUIRED', message: 'Verified evidence is required at approval time' }, requestId: id }, 409);
       const input = await body<DecisionInput>(request);
       if ((action === 'reject' || action === 'return') && !input?.comment?.trim()) return json({ error: { code: 'VALIDATION_ERROR', message: 'A comment is required for reject or return' }, requestId: id }, 400);
       if (action === 'approve') {
@@ -237,7 +245,7 @@ export default {
           .bind(productId, product.revision).first<{ id: string }>();
         const nextState = next ? 'PENDING_APPROVAL' : 'APPROVED';
         const statements = [
-          env.DB.prepare("UPDATE approval_steps SET status = 'APPROVED', approver_id = ?, decided_at = CURRENT_TIMESTAMP, comment = ? WHERE id = ? AND status = 'PENDING'").bind(actor.id, input?.comment?.trim() || null, step.id),
+          env.DB.prepare("UPDATE approval_steps SET status = 'APPROVED', approver_id = ?, decided_at = CURRENT_TIMESTAMP, comment = ? WHERE id = ? AND status = 'PENDING'").bind(actor.id, input?.comment?.trim() ?? null, step.id),
           env.DB.prepare('UPDATE products SET state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(nextState, productId),
           env.DB.prepare('INSERT INTO audit_events (id, actor_id, actor_role, action, module, record_type, record_id, previous_state, new_state, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), actor.id, actorRole(actor), 'APPROVE', 'REGULATORY_AFFAIRS', 'PRODUCT', productId, product.state, nextState, id),
         ];
