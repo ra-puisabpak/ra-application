@@ -16,6 +16,6 @@
   "assets": {
     "directory": "./ui",
     "binding": "ASSETS",
-    "run_worker_first": ["/auth/*", "/products*", "/evidence*", "/files/*", "/approvals/*"]
+    "run_worker_first": ["/auth/*", "/products*", "/evidence*", "/files/*", "/approvals/*", "/tasks*", "/dashboard*"]
   }
 }
