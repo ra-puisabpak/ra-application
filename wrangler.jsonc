@@ -1,15 +1,21 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "ra-application",
+  "account_id": "acd0ef2518aed1f77c126d0592469ae1",
   "main": "src/worker.ts",
   "compatibility_date": "2025-09-27",
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "ra-application",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "database_id": "19d30663-7eab-4ba6-aacb-ec8013566665",
       "migrations_dir": "migrations"
     }
   ],
-  "r2_buckets": [{ "binding": "EVIDENCE", "bucket_name": "ra-application-evidence" }]
+  "r2_buckets": [{ "binding": "EVIDENCE", "bucket_name": "ra-application-evidence" }],
+  "assets": {
+    "directory": "./ui",
+    "binding": "ASSETS",
+    "run_worker_first": ["/auth/*", "/products*", "/evidence*", "/files/*", "/approvals/*"]
+  }
 }

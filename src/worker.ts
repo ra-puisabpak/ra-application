@@ -1,6 +1,7 @@
 export interface Env {
   DB: D1Database;
   EVIDENCE: R2Bucket;
+  ASSETS: Fetcher;
 }
 
 type RoleGrant = { role: string; canApprove: boolean };
@@ -61,6 +62,35 @@ export default {
     const unauthorized = protectedRoute(actor, id);
     if (unauthorized || !actor) return unauthorized!;
     if (request.method === 'GET' && url.pathname === '/auth/me') return json({ data: actor, requestId: id });
+
+    if (request.method === 'GET' && url.pathname === '/tasks') {
+      const rows = await env.DB.prepare(`SELECT t.id, t.title, t.module, t.record_type, t.record_id, t.action, t.due_date, t.status, t.priority,
+        CASE WHEN t.due_date IS NOT NULL AND t.due_date < date('now') AND t.status NOT IN ('COMPLETED','CANCELLED') THEN 1 ELSE 0 END AS overdue
+        FROM tasks t WHERE t.owner_id = ? ORDER BY overdue DESC, CASE t.priority WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'NORMAL' THEN 3 ELSE 4 END, t.due_date`).bind(actor.id).all();
+      return json({ data: rows.results, requestId: id });
+    }
+
+    const taskRoute = url.pathname.match(/^\\/tasks\\/([a-f0-9-]+)$/);
+    if (taskRoute) {
+      const task = await env.DB.prepare(`SELECT id, title, module, record_type, record_id, action, owner_id, due_date, status, priority, created_at, updated_at, completed_at
+        FROM tasks WHERE id = ? AND owner_id = ?`).bind(taskRoute[1], actor.id).first<Record<string, unknown>>();
+      if (!task) return json({ error: { code: 'NOT_FOUND', message: 'Task not found' }, requestId: id }, 404);
+      return json({ data: task, requestId: id });
+    }
+
+    const taskAction = url.pathname.match(/^\\/tasks\\/([a-f0-9-]+)\\/(start|complete|cancel)$/);
+    if (request.method === 'POST' && taskAction) {
+      const task = await env.DB.prepare('SELECT id, status, owner_id FROM tasks WHERE id = ?').bind(taskAction[1]).first<{ id: string; status: string; owner_id: string }>();
+      if (!task) return json({ error: { code: 'NOT_FOUND', message: 'Task not found' }, requestId: id }, 404);
+      if (task.owner_id !== actor.id) return json({ error: { code: 'FORBIDDEN', message: 'Task owner required' }, requestId: id }, 403);
+      const action = taskAction[2];
+      const next = action === 'start' ? 'IN_PROGRESS' : action === 'complete' ? 'COMPLETED' : 'CANCELLED';
+      if (task.status === 'COMPLETED' || task.status === 'CANCELLED') return json({ error: { code: 'INVALID_STATE', message: 'Task is already closed' }, requestId: id }, 409);
+      await env.DB.prepare('UPDATE tasks SET status = ?, completed_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+        .bind(next, next === 'COMPLETED' || next === 'CANCELLED' ? new Date().toISOString() : null, task.id).run();
+      await audit(env, actor, id, action.toUpperCase(), 'TASK_CENTER', task.id, task.status, next);
+      return json({ data: { taskId: task.id, status: next }, requestId: id });
+    }
 
     if (request.method === 'GET' && url.pathname === '/products') {
       const rows = await env.DB.prepare('SELECT id, product_code, thai_name, english_name, site_id, revision, state, version FROM products ORDER BY product_code').all<Record<string, unknown>>();
@@ -188,6 +218,7 @@ export default {
       ]);
       return json({ data: { productId, state: terminalState }, requestId: id });
     }
+    if (env.ASSETS) return env.ASSETS.fetch(request);
     return json({ error: { code: 'NOT_FOUND', message: 'Route not found' }, requestId: id }, 404);
   },
 } satisfies ExportedHandler<Env>;
