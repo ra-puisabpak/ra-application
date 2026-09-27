@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Supplier Regulatory Requalification</title>
+<style>
+:root{--navy:#10243e;--bg:#f4f7fb;--line:#dce4ee;--muted:#68778a;--text:#172536;--ok:#16724a;--warn:#a56600;--danger:#b23a3a;--blue:#2867b2}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--text)}
+.app{display:grid;grid-template-columns:240px 1fr;min-height:100vh}.side{background:var(--navy);color:#fff;padding:24px 16px}.brand{font-weight:800;font-size:18px;margin-bottom:28px}.nav{display:grid;gap:6px}.nav div{padding:11px 12px;border-radius:8px;color:#d8e3ef;font-size:14px}.nav .active{background:#1d3b60;color:#fff}.main{min-width:0}.top{height:64px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 28px}.crumb{font-size:13px;color:var(--muted)}.user{font-size:13px;font-weight:650}.wrap{padding:28px;max-width:1500px;margin:auto}.title{display:flex;justify-content:space-between;gap:20px;align-items:flex-start}.title h1{margin:0 0 7px;font-size:25px}.title p{margin:0;color:var(--muted);font-size:14px}.btn{border:0;border-radius:8px;padding:10px 15px;background:var(--navy);color:#fff;font-weight:700}.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin:22px 0}.card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:17px}.stat .n{font-size:24px;font-weight:800}.stat .l{font-size:12px;color:var(--muted);margin-top:5px}.grid{display:grid;grid-template-columns:1.8fr 1fr;gap:16px}.section h2{font-size:16px;margin:0 0 14px}.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}.input,.select{border:1px solid var(--line);background:#fff;border-radius:7px;padding:9px 11px;font-size:13px}.table{overflow:auto}.table table{width:100%;border-collapse:collapse;min-width:780px}.table th,.table td{text-align:left;padding:12px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:top}.table th{font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:.04em}.pill{display:inline-block;padding:4px 8px;border-radius:999px;font-size:11px;font-weight:750}.green{background:#e5f5ed;color:var(--ok)}.amber{background:#fff2d9;color:var(--warn)}.red{background:#fde8e8;color:var(--danger)}.blue{background:#e7f0fc;color:var(--blue)}.item{padding:12px 0;border-bottom:1px solid var(--line)}.item:last-child{border-bottom:0}.item strong{font-size:13px}.item small{display:block;color:var(--muted);margin-top:4px;font-size:12px}.flow{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;margin-top:15px}.step{background:#eef3f8;border:1px solid var(--line);border-radius:7px;padding:10px 6px;text-align:center;font-size:10px;font-weight:700}.note{margin-top:16px;background:#f8fafc;border:1px dashed #cbd6e2;border-radius:8px;padding:12px;color:var(--muted);font-size:12px;line-height:1.6}
+@media(max-width:1050px){.app{grid-template-columns:1fr}.side{display:none}.stats{grid-template-columns:repeat(3,1fr)}.grid{grid-template-columns:1fr}}
+@media(max-width:650px){.wrap{padding:18px}.stats{grid-template-columns:repeat(2,1fr)}.title{display:block}.title .btn{margin-top:14px}}
+</style>
+</head>
+<body>
+<div class="app">
+<aside class="side"><div class="brand">PUISABPAK RA</div><div class="nav"><div>Dashboard</div><div>Document Control</div><div>Regulatory Affairs</div><div class="active">Supplier Management</div><div>Product Management</div><div>Production &amp; QC</div><div>QA / CAPA</div><div>Training &amp; Competency</div><div>Traceability &amp; Recall</div><div>Reports / Analytics</div></div></aside>
+<main class="main">
+<header class="top"><span class="crumb">Supplier Management / Regulatory Requalification</span><span class="user">RA Supervisor</span></header>
+<div class="wrap">
+<div class="title"><div><h1>Supplier Regulatory Requalification</h1><p>ควบคุมคุณสมบัติผู้ขาย หลักฐานทาง Regulatory และ Trigger ที่ทำให้ต้อง Requalification</p></div><button class="btn">+ New Requirement</button></div>
+
+<div class="stats">
+<div class="card stat"><div class="n">23</div><div class="l">Suppliers in scope</div></div>
+<div class="card stat"><div class="n">18</div><div class="l">Qualified</div></div>
+<div class="card stat"><div class="n">3</div><div class="l">Under Review</div></div>
+<div class="card stat"><div class="n">2</div><div class="l">Evidence Expiring</div></div>
+<div class="card stat"><div class="n">4</div><div class="l">Requalification Triggers</div></div>
+</div>
+
+<div class="grid">
+<section class="card section">
+<h2>Supplier Regulatory Requirements</h2>
+<div class="filters"><input class="input" placeholder="Search supplier / ingredient"><select class="select"><option>All status</option><option>QUALIFIED</option><option>UNDER_REVIEW</option><option>CONDITIONAL</option><option>EXPIRED</option></select><select class="select"><option>All triggers</option><option>DOCUMENT_EXPIRY</option><option>REGULATORY_CHANGE</option><option>INGREDIENT_CHANGE</option><option>NONCONFORMITY</option></select></div>
+<div class="table"><table><thead><tr><th>Supplier</th><th>Ingredient</th><th>Required Evidence</th><th>Evidence</th><th>Review / Expiry</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td><strong>SUP-001</strong><br>Supplier A</td><td>RM-001<br>RM-005</td><td>Spec<br>Regulatory declaration<br>Certificate</td><td>3 / 3</td><td>30 Sep 2026<br>15 Oct 2026</td><td><span class="pill green">QUALIFIED</span></td></tr>
+<tr><td><strong>SUP-004</strong><br>Supplier B</td><td>RM-021</td><td>Spec<br>Regulatory declaration</td><td>1 / 2</td><td>28 Sep 2026<br>—</td><td><span class="pill amber">UNDER_REVIEW</span></td></tr>
+<tr><td><strong>SUP-009</strong><br>Supplier C</td><td>RM-015</td><td>Spec<br>Allergen declaration</td><td>2 / 2</td><td>05 Oct 2026<br>05 Oct 2026</td><td><span class="pill blue">CONDITIONAL</span></td></tr>
+<tr><td><strong>SUP-014</strong><br>Supplier D</td><td>RM-022</td><td>Spec<br>Certificate</td><td>1 / 2</td><td>20 Sep 2026<br>20 Sep 2026</td><td><span class="pill red">EXPIRED</span></td></tr>
+</tbody></table></div>
+</section>
+
+<aside class="card section"><h2>Requalification Triggers</h2>
+<div class="item"><strong>DOCUMENT_EXPIRY</strong><small>หลักฐานหมดอายุ → ตรวจสอบหลักฐานใหม่</small></div>
+<div class="item"><strong>REGULATORY_CHANGE</strong><small>ข้อกำหนดเปลี่ยน → ประเมินผลกระทบต่อ Supplier/Ingredient</small></div>
+<div class="item"><strong>INGREDIENT_CHANGE</strong><small>มีการเปลี่ยนวัตถุดิบ/ข้อกำหนด → เปิดการทบทวน</small></div>
+<div class="item"><strong>SUPPLIER_CHANGE</strong><small>เปลี่ยน Supplier → ตรวจ qualification ใหม่ตามขอบเขต</small></div>
+<div class="item"><strong>NONCONFORMITY / AUDIT_FINDING</strong><small>เชื่อมต่อ Finding และ CAPA ตามความเหมาะสม</small></div>
+<div class="item"><strong>PERIODIC_REVIEW</strong><small>ทบทวนตามรอบที่กำหนดใน Requirement</small></div>
+</aside>
+</div>
+
+<section class="card section" style="margin-top:16px"><h2>Control Flow</h2>
+<div class="flow"><div class="step">Trigger</div><div class="step">Identify Supplier</div><div class="step">Required Evidence</div><div class="step">Evidence Check</div><div class="step">Review</div><div class="step">Qualification Decision</div><div class="step">Next Review</div></div>
+<div class="note"><strong>Integrity rules:</strong> ต้องมี Required Document Types และ Evidence ที่รับแล้วเพียงพอก่อนถือว่า evidence ครบ; สถานะและการตัดสินใจต้องตรวจสอบย้อนกลับได้ และการเปลี่ยนแปลงที่เกี่ยวข้องกับ Regulatory / Ingredient / Supplier / NC / Audit Finding ต้องสามารถเปิด Requalification ได้</div>
+</section>
+</div>
+</main>
+</div>
+</body>
+</html>
