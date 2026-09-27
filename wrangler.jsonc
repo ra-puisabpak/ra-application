@@ -11,5 +11,10 @@
       "migrations_dir": "migrations"
     }
   ],
-  "r2_buckets": [{ "binding": "EVIDENCE", "bucket_name": "ra-application-evidence" }]
+  "r2_buckets": [{ "binding": "EVIDENCE", "bucket_name": "ra-application-evidence" }],
+  "assets": {
+    "directory": "./ui",
+    "binding": "ASSETS",
+    "run_worker_first": ["/auth/*", "/products*", "/evidence*", "/files/*", "/approvals/*"]
+  }
 }
