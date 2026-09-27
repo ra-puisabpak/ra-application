@@ -28,6 +28,7 @@ export type ImpactArea =
   | 'FM'
   | 'TRAINING'
   | 'SUPPLIER'
+  | 'PACKAGING'
   | 'PROCESS_FLOW'
   | 'VALIDATION';
 
