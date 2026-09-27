@@ -92,6 +92,19 @@ export default {
       return json({ data: { taskId: task.id, status: next }, requestId: id });
     }
 
+    if (request.method === 'GET' && url.pathname === '/dashboard') {
+      const productStates = await env.DB.prepare('SELECT state, COUNT(*) AS count FROM products GROUP BY state ORDER BY state').all();
+      const taskStates = await env.DB.prepare('SELECT status, COUNT(*) AS count FROM tasks WHERE owner_id = ? GROUP BY status ORDER BY status').bind(actor.id).all();
+      const evidenceStates = await env.DB.prepare('SELECT verification_status AS status, COUNT(*) AS count FROM evidence GROUP BY verification_status ORDER BY verification_status').all();
+      const pendingApprovals = await env.DB.prepare("SELECT COUNT(*) AS count FROM approval_steps WHERE status = 'PENDING' AND required_role IN (SELECT role FROM user_roles WHERE user_id = ? AND can_approve = 1)").bind(actor.id).first();
+      return json({ data: {
+        products: productStates.results,
+        myTasks: taskStates.results,
+        evidence: evidenceStates.results,
+        pendingApprovals: Number(pendingApprovals?.count ?? 0)
+      }, requestId: id });
+    }
+
     if (request.method === 'GET' && url.pathname === '/products') {
       const rows = await env.DB.prepare('SELECT id, product_code, thai_name, english_name, site_id, revision, state, version FROM products ORDER BY product_code').all<Record<string, unknown>>();
       return json({ data: rows.results.map(productFromRow), requestId: id });
