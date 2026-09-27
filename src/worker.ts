@@ -59,8 +59,22 @@ export default {
     if (request.method === 'GET' && url.pathname === '/health') return json({ ok: true, requestId: id });
 
     // Static UI assets remain publicly renderable; application APIs below require Access identity.
-    if (env.ASSETS && (request.method === 'GET' || request.method === 'HEAD') && !url.pathname.startsWith('/auth/') && !url.pathname.startsWith('/products') && !url.pathname.startsWith('/evidence') && !url.pathname.startsWith('/files/') && !url.pathname.startsWith('/approvals/') && !url.pathname.startsWith('/tasks') && !url.pathname.startsWith('/dashboard')) {
-      return env.ASSETS.fetch(request);
+    // Explicitly map the site root to index.html so the production Worker never depends on
+    // implicit directory-index behavior of the Assets binding.
+    if (env.ASSETS && (request.method === 'GET' || request.method === 'HEAD')) {
+      const apiPath = url.pathname.startsWith('/auth/')
+        || url.pathname.startsWith('/products')
+        || url.pathname.startsWith('/evidence')
+        || url.pathname.startsWith('/files/')
+        || url.pathname.startsWith('/approvals/')
+        || url.pathname.startsWith('/tasks')
+        || url.pathname.startsWith('/dashboard');
+      if (!apiPath) {
+        const assetRequest = url.pathname === '/'
+          ? new Request(new URL('/index.html', request.url), request)
+          : request;
+        return env.ASSETS.fetch(assetRequest);
+      }
     }
 
     const actor = await authenticatedActor(request, env);
