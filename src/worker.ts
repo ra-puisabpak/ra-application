@@ -11,24 +11,13 @@ type ProductInput = { productCode?: string; thaiName?: string; englishName?: str
 type EvidenceInput = { recordType?: string; recordId?: string; title?: string; revision?: string; contentType?: string };
 type DecisionInput = { comment?: string };
 
-const guestActor: Actor = {
-  id: 'guest',
-  email: 'guest@puisabpak.local',
-  roles: [
-    { role: 'RA', canApprove: true },
-    { role: 'R&D', canApprove: true },
-    { role: 'QA', canApprove: true },
-    { role: 'QC', canApprove: true },
-    { role: 'DCC', canApprove: true },
-    { role: 'MANAGEMENT', canApprove: true },
-  ],
-};
+const previewActor: Actor = { id: 'preview', email: 'preview@puisabpak.local', roles: [] };
 
 const json = (value: unknown, status = 200): Response => new Response(JSON.stringify(value), {
   status, headers: { 'content-type': 'application/json; charset=utf-8' },
 });
 const requestId = (request: Request): string => request.headers.get('cf-ray') ?? crypto.randomUUID();
-const actorRole = (actor: Actor): string => actor.roles[0]?.role ?? 'UNKNOWN';
+const actorRole = (actor: Actor): string => actor.roles[0]?.role ?? 'PREVIEW';
 const requireRole = (actor: Actor, permitted: string[]): boolean => actor.roles.some((grant) => permitted.includes(grant.role));
 const isApiRoute = (pathname: string): boolean => [
   '/auth/',
@@ -46,14 +35,13 @@ const productFromRow = (row: Record<string, unknown>): Product => ({
   revision: String(row.revision), state: String(row.state), version: Number(row.version),
 });
 
-async function authenticatedActor(request: Request, env: Env): Promise<Actor> {
+async function authenticatedActor(request: Request, env: Env): Promise<Actor | null> {
   const email = request.headers.get('cf-access-authenticated-user-email')?.trim().toLowerCase();
-  if (!email) return guestActor;
+  if (!email) return null;
 
   try {
     const user = await env.DB.prepare('SELECT id, email FROM users WHERE email = ? AND active = 1').bind(email).first<{ id: string; email: string }>();
-    if (!user) return guestActor;
-
+    if (!user) return null;
     const roles = await env.DB.prepare('SELECT role, can_approve FROM user_roles WHERE user_id = ?').bind(user.id).all<{ role: string; can_approve: number }>();
     return {
       id: user.id,
@@ -62,7 +50,7 @@ async function authenticatedActor(request: Request, env: Env): Promise<Actor> {
     };
   } catch (error) {
     console.error('AUTH_LOOKUP_FAILED', { email, error });
-    return guestActor;
+    return null;
   }
 }
 
@@ -77,7 +65,9 @@ async function audit(env: Env, actor: Actor, id: string, action: string, recordT
     .bind(crypto.randomUUID(), actor.id, actorRole(actor), action, 'REGULATORY_AFFAIRS', recordType, recordId, previousState ?? null, newState ?? null, id).run();
 }
 
-const protectedRoute = (_actor: Actor | null, _id: string): Response | null => null;
+const protectedRoute = (actor: Actor | null, id: string): Response | null => actor
+  ? null
+  : json({ error: { code: 'UNAUTHENTICATED', message: 'Authenticated user required for write actions' }, requestId: id }, 401);
 
 async function body<T>(request: Request): Promise<T | null> {
   try { return await request.json() as T; } catch { return null; }
@@ -87,6 +77,7 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     const id = requestId(request);
+
     if (request.method === 'GET' && url.pathname === '/health') return json({ ok: true, requestId: id });
 
     if (env.ASSETS && (request.method === 'GET' || request.method === 'HEAD')) {
@@ -108,23 +99,27 @@ export default {
     }
 
     const actor = await authenticatedActor(request, env);
-    if (request.method === 'GET' && url.pathname === '/auth/me') return json({ data: actor, requestId: id });
+    const effectiveActor = actor ?? previewActor;
 
-    // No login gate for now. Treat guest as default operator.
-    const unauthorized = protectedRoute(actor, id);
-    if (unauthorized) return unauthorized;
+    if (request.method === 'GET' && url.pathname === '/auth/me') {
+      return json({ data: effectiveActor, requestId: id });
+    }
+
+    if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(request.method) && !actor) {
+      return json({ error: { code: 'UNAUTHENTICATED', message: 'Login is required for write actions in preview mode' }, requestId: id }, 401);
+    }
 
     if (request.method === 'GET' && url.pathname === '/tasks') {
       const rows = await env.DB.prepare(`SELECT t.id, t.title, t.module, t.record_type, t.record_id, t.action, t.due_date, t.status, t.priority,
         CASE WHEN t.due_date IS NOT NULL AND t.due_date < date('now') AND t.status NOT IN ('COMPLETED','CANCELLED') THEN 1 ELSE 0 END AS overdue
-        FROM tasks t WHERE t.owner_id = ? ORDER BY overdue DESC, CASE t.priority WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'NORMAL' THEN 3 ELSE 4 END, t.due_date`).bind(actor.id).all();
+        FROM tasks t WHERE t.owner_id = ? ORDER BY overdue DESC, CASE t.priority WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'NORMAL' THEN 3 ELSE 4 END, t.due_date`).bind(effectiveActor.id).all();
       return json({ data: rows.results, requestId: id });
     }
 
     const taskRoute = url.pathname.match(/^\/tasks\/([a-f0-9-]+)$/);
     if (taskRoute) {
       const task = await env.DB.prepare(`SELECT id, title, module, record_type, record_id, action, owner_id, due_date, status, priority, created_at, updated_at, completed_at
-        FROM tasks WHERE id = ? AND owner_id = ?`).bind(taskRoute[1], actor.id).first<Record<string, unknown>>();
+        FROM tasks WHERE id = ? AND owner_id = ?`).bind(taskRoute[1], effectiveActor.id).first<Record<string, unknown>>();
       if (!task) return json({ error: { code: 'NOT_FOUND', message: 'Task not found' }, requestId: id }, 404);
       return json({ data: task, requestId: id });
     }
@@ -133,21 +128,21 @@ export default {
     if (request.method === 'POST' && taskAction) {
       const task = await env.DB.prepare('SELECT id, status, owner_id FROM tasks WHERE id = ?').bind(taskAction[1]).first<{ id: string; status: string; owner_id: string }>();
       if (!task) return json({ error: { code: 'NOT_FOUND', message: 'Task not found' }, requestId: id }, 404);
-      if (task.owner_id !== actor.id) return json({ error: { code: 'FORBIDDEN', message: 'Task owner required' }, requestId: id }, 403);
+      if (task.owner_id !== actor!.id) return json({ error: { code: 'FORBIDDEN', message: 'Task owner required' }, requestId: id }, 403);
       const action = taskAction[2];
       const next = action === 'start' ? 'IN_PROGRESS' : action === 'complete' ? 'COMPLETED' : 'CANCELLED';
       if (task.status === 'COMPLETED' || task.status === 'CANCELLED') return json({ error: { code: 'INVALID_STATE', message: 'Task is already closed' }, requestId: id }, 409);
       await env.DB.prepare('UPDATE tasks SET status = ?, completed_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
         .bind(next, next === 'COMPLETED' || next === 'CANCELLED' ? new Date().toISOString() : null, task.id).run();
-      await audit(env, actor, id, action.toUpperCase(), 'TASK_CENTER', task.id, task.status, next);
+      await audit(env, actor!, id, action.toUpperCase(), 'TASK_CENTER', task.id, task.status, next);
       return json({ data: { taskId: task.id, status: next }, requestId: id });
     }
 
     if (request.method === 'GET' && url.pathname === '/dashboard') {
       const productStates = await env.DB.prepare('SELECT state, COUNT(*) AS count FROM products GROUP BY state ORDER BY state').all();
-      const taskStates = await env.DB.prepare('SELECT status, COUNT(*) AS count FROM tasks WHERE owner_id = ? GROUP BY status ORDER BY status').bind(actor.id).all();
+      const taskStates = await env.DB.prepare('SELECT status, COUNT(*) AS count FROM tasks WHERE owner_id = ? GROUP BY status ORDER BY status').bind(effectiveActor.id).all();
       const evidenceStates = await env.DB.prepare('SELECT verification_status AS status, COUNT(*) AS count FROM evidence GROUP BY verification_status ORDER BY verification_status').all();
-      const pendingApprovals = await env.DB.prepare("SELECT COUNT(*) AS count FROM approval_steps WHERE status = 'PENDING' AND required_role IN (SELECT role FROM user_roles WHERE user_id = ? AND can_approve = 1)").bind(actor.id).first<{ count: number }>();
+      const pendingApprovals = await env.DB.prepare("SELECT COUNT(*) AS count FROM approval_steps WHERE status = 'PENDING' AND required_role IN (SELECT role FROM user_roles WHERE user_id = ? AND can_approve = 1)").bind(effectiveActor.id).first<{ count: number }>();
       return json({ data: {
         products: productStates.results,
         myTasks: taskStates.results,
@@ -161,6 +156,7 @@ export default {
       return json({ data: rows.results.map(productFromRow), requestId: id });
     }
     if (request.method === 'POST' && url.pathname === '/products') {
+      if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
       if (!requireRole(actor, ['RA', 'R&D'])) return json({ error: { code: 'FORBIDDEN', message: 'RA or R&D role required' }, requestId: id }, 403);
       const input = await body<ProductInput>(request);
       if (!input?.productCode?.trim() || !input.thaiName?.trim() || !input.siteId?.trim()) return json({ error: { code: 'VALIDATION_ERROR', message: 'productCode, thaiName and siteId are required' }, requestId: id }, 400);
@@ -182,6 +178,7 @@ export default {
       if (!existing) return json({ error: { code: 'NOT_FOUND', message: 'Product not found' }, requestId: id }, 404);
       if (request.method === 'GET') return json({ data: productFromRow(existing), requestId: id });
       if (request.method === 'PATCH') {
+        if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
         if (!requireRole(actor, ['RA', 'R&D'])) return json({ error: { code: 'FORBIDDEN', message: 'RA or R&D role required' }, requestId: id }, 403);
         const input = await body<ProductInput>(request);
         const product = productFromRow(existing);
@@ -198,6 +195,7 @@ export default {
 
     const submit = url.pathname.match(/^\/products\/([a-f0-9-]+)\/submit$/);
     if (request.method === 'POST' && submit) {
+      if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
       if (!requireRole(actor, ['RA', 'R&D'])) return json({ error: { code: 'FORBIDDEN', message: 'RA or R&D role required' }, requestId: id }, 403);
       const product = await env.DB.prepare('SELECT id, revision, state FROM products WHERE id = ?').bind(submit[1]).first<{ id: string; revision: string; state: string }>();
       if (!product) return json({ error: { code: 'NOT_FOUND', message: 'Product not found' }, requestId: id }, 404);
@@ -213,6 +211,7 @@ export default {
     }
 
     if (request.method === 'POST' && url.pathname === '/evidence') {
+      if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
       if (!requireRole(actor, ['RA', 'QA', 'QC', 'DCC', 'R&D'])) return json({ error: { code: 'FORBIDDEN', message: 'Evidence upload role required' }, requestId: id }, 403);
       const input = await body<EvidenceInput>(request);
       if (!input?.recordType || !input.recordId || !input.title?.trim() || !input.revision?.trim() || !input.contentType?.trim()) return json({ error: { code: 'VALIDATION_ERROR', message: 'recordType, recordId, title, revision and contentType are required' }, requestId: id }, 400);
@@ -228,6 +227,7 @@ export default {
 
     const upload = url.pathname.match(/^\/files\/upload\/([a-f0-9-]+)$/);
     if (request.method === 'PUT' && upload) {
+      if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
       if (!requireRole(actor, ['RA', 'QA', 'QC', 'DCC', 'R&D'])) return json({ error: { code: 'FORBIDDEN', message: 'Evidence upload role required' }, requestId: id }, 403);
       const evidence = await env.DB.prepare('SELECT storage_key FROM evidence WHERE id = ? AND uploaded_by = ?').bind(upload[1], actor.id).first<{ storage_key: string }>();
       if (!evidence) return json({ error: { code: 'NOT_FOUND', message: 'Evidence record not found or not owned by actor' }, requestId: id }, 404);
@@ -242,6 +242,7 @@ export default {
 
     const verify = url.pathname.match(/^\/evidence\/([a-f0-9-]+)\/verify$/);
     if (request.method === 'PATCH' && verify) {
+      if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
       if (!requireRole(actor, ['RA', 'QA'])) return json({ error: { code: 'FORBIDDEN', message: 'RA or QA role required' }, requestId: id }, 403);
       const evidence = await env.DB.prepare('SELECT verification_status FROM evidence WHERE id = ?').bind(verify[1]).first<{ verification_status: string }>();
       if (!evidence) return json({ error: { code: 'NOT_FOUND', message: 'Evidence not found' }, requestId: id }, 404);
@@ -253,6 +254,7 @@ export default {
 
     const decision = url.pathname.match(/^\/approvals\/PRODUCT\/([a-f0-9-]+)\/(approve|reject|return)$/);
     if (request.method === 'POST' && decision) {
+      if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
       const [productId, action] = [decision[1], decision[2]];
       const product = await env.DB.prepare('SELECT id, revision, state FROM products WHERE id = ?').bind(productId).first<{ id: string; revision: string; state: string }>();
       if (!product) return json({ error: { code: 'NOT_FOUND', message: 'Product not found' }, requestId: id }, 404);
@@ -277,6 +279,7 @@ export default {
         await env.DB.batch(statements);
         return json({ data: { productId, state: nextState, nextApprovalStep: next ? 'PENDING' : null }, requestId: id });
       }
+
       const terminalState = action === 'reject' ? 'REJECTED' : 'RETURNED';
       await env.DB.batch([
         env.DB.prepare('UPDATE approval_steps SET status = ?, approver_id = ?, decided_at = CURRENT_TIMESTAMP, comment = ? WHERE id = ? AND status = ?').bind(terminalState, actor.id, input!.comment!.trim(), step.id, 'PENDING'),
@@ -285,6 +288,7 @@ export default {
       ]);
       return json({ data: { productId, state: terminalState }, requestId: id });
     }
+
     if (env.ASSETS) return env.ASSETS.fetch(request);
     return json({ error: { code: 'NOT_FOUND', message: 'Route not found' }, requestId: id }, 404);
   },
