@@ -78,7 +78,7 @@ export default {
       return json({ data: task, requestId: id });
     }
 
-    const taskAction = url.pathname.match(/^\/tasks\/([a-f0-9-]+)\\/(start|complete|cancel)$/);
+    const taskAction = url.pathname.match(/^\/tasks\/([a-f0-9-]+)\/(start|complete|cancel)$/);
     if (request.method === 'POST' && taskAction) {
       const task = await env.DB.prepare('SELECT id, status, owner_id FROM tasks WHERE id = ?').bind(taskAction[1]).first<{ id: string; status: string; owner_id: string }>();
       if (!task) return json({ error: { code: 'NOT_FOUND', message: 'Task not found' }, requestId: id }, 404);
