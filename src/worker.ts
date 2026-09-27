@@ -11,6 +11,19 @@ type ProductInput = { productCode?: string; thaiName?: string; englishName?: str
 type EvidenceInput = { recordType?: string; recordId?: string; title?: string; revision?: string; contentType?: string };
 type DecisionInput = { comment?: string };
 
+const guestActor: Actor = {
+  id: 'guest',
+  email: 'guest@puisabpak.local',
+  roles: [
+    { role: 'RA', canApprove: true },
+    { role: 'R&D', canApprove: true },
+    { role: 'QA', canApprove: true },
+    { role: 'QC', canApprove: true },
+    { role: 'DCC', canApprove: true },
+    { role: 'MANAGEMENT', canApprove: true },
+  ],
+};
+
 const json = (value: unknown, status = 200): Response => new Response(JSON.stringify(value), {
   status, headers: { 'content-type': 'application/json; charset=utf-8' },
 });
@@ -33,13 +46,24 @@ const productFromRow = (row: Record<string, unknown>): Product => ({
   revision: String(row.revision), state: String(row.state), version: Number(row.version),
 });
 
-async function authenticatedActor(request: Request, env: Env): Promise<Actor | null> {
+async function authenticatedActor(request: Request, env: Env): Promise<Actor> {
   const email = request.headers.get('cf-access-authenticated-user-email')?.trim().toLowerCase();
-  if (!email) return null;
-  const user = await env.DB.prepare('SELECT id, email FROM users WHERE email = ? AND active = 1').bind(email).first<{ id: string; email: string }>();
-  if (!user) return null;
-  const roles = await env.DB.prepare('SELECT role, can_approve FROM user_roles WHERE user_id = ?').bind(user.id).all<{ role: string; can_approve: number }>();
-  return { id: user.id, email: user.email, roles: roles.results.map((row) => ({ role: row.role, canApprove: row.can_approve === 1 })) };
+  if (!email) return guestActor;
+
+  try {
+    const user = await env.DB.prepare('SELECT id, email FROM users WHERE email = ? AND active = 1').bind(email).first<{ id: string; email: string }>();
+    if (!user) return guestActor;
+
+    const roles = await env.DB.prepare('SELECT role, can_approve FROM user_roles WHERE user_id = ?').bind(user.id).all<{ role: string; can_approve: number }>();
+    return {
+      id: user.id,
+      email: user.email,
+      roles: roles.results.map((row) => ({ role: row.role, canApprove: row.can_approve === 1 })),
+    };
+  } catch (error) {
+    console.error('AUTH_LOOKUP_FAILED', { email, error });
+    return guestActor;
+  }
 }
 
 async function hasVerifiedEvidence(env: Env, recordType: string, recordId: string, revision: string): Promise<boolean> {
@@ -53,9 +77,7 @@ async function audit(env: Env, actor: Actor, id: string, action: string, recordT
     .bind(crypto.randomUUID(), actor.id, actorRole(actor), action, 'REGULATORY_AFFAIRS', recordType, recordId, previousState ?? null, newState ?? null, id).run();
 }
 
-const protectedRoute = (actor: Actor | null, id: string): Response | null => actor
-  ? null
-  : json({ error: { code: 'UNAUTHENTICATED', message: 'An active Cloudflare Access user is required' }, requestId: id }, 401);
+const protectedRoute = (_actor: Actor | null, _id: string): Response | null => null;
 
 async function body<T>(request: Request): Promise<T | null> {
   try { return await request.json() as T; } catch { return null; }
@@ -86,9 +108,11 @@ export default {
     }
 
     const actor = await authenticatedActor(request, env);
-    const unauthorized = protectedRoute(actor, id);
-    if (unauthorized || !actor) return unauthorized!;
     if (request.method === 'GET' && url.pathname === '/auth/me') return json({ data: actor, requestId: id });
+
+    // No login gate for now. Treat guest as default operator.
+    const unauthorized = protectedRoute(actor, id);
+    if (unauthorized) return unauthorized;
 
     if (request.method === 'GET' && url.pathname === '/tasks') {
       const rows = await env.DB.prepare(`SELECT t.id, t.title, t.module, t.record_type, t.record_id, t.action, t.due_date, t.status, t.priority,
@@ -265,3 +289,4 @@ export default {
     return json({ error: { code: 'NOT_FOUND', message: 'Route not found' }, requestId: id }, 404);
   },
 } satisfies ExportedHandler<Env>;
+
