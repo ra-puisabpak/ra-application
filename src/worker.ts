@@ -1,6 +1,7 @@
 export interface Env {
   DB: D1Database;
   EVIDENCE: R2Bucket;
+  ASSETS: Fetcher;
 }
 
 type RoleGrant = { role: string; canApprove: boolean };
@@ -188,6 +189,6 @@ export default {
       ]);
       return json({ data: { productId, state: terminalState }, requestId: id });
     }
-    return json({ error: { code: 'NOT_FOUND', message: 'Route not found' }, requestId: id }, 404);
+    if (env.ASSETS) return env.ASSETS.fetch(request);\n    return json({ error: { code: 'NOT_FOUND', message: 'Route not found' }, requestId: id }, 404);
   },
 } satisfies ExportedHandler<Env>;
