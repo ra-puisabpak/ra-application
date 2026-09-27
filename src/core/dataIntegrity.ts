@@ -1,6 +1,8 @@
 import type { IntegrityIssue } from './production';
 
 export type IntegrityContext = {
+  module?: string;
+  recordId?: string;
   formulaTotal?: number;
   formulaRevision?: string;
   processRevision?: string;
@@ -16,8 +18,8 @@ export type IntegrityContext = {
 
 export const validateDataIntegrity = (c: IntegrityContext): IntegrityIssue[] => {
   const issues: IntegrityIssue[] = [];
-  const add = (code: string, message: string, severity: 'ERROR' | 'WARNING' = 'ERROR') =>
-    issues.push({ code, message, severity });
+  const add = (code: string, message: string, severity: 'BLOCKER' | 'WARNING' = 'BLOCKER') =>
+    issues.push({ code, message, severity, module: c.module ?? 'DATA_INTEGRITY', recordId: c.recordId ?? 'UNKNOWN' });
 
   if (c.formulaTotal !== undefined && Math.abs(c.formulaTotal - 100) > 0.0001)
     add('FORMULA_TOTAL_NOT_100', 'Formula total must equal 100%.');
@@ -48,4 +50,4 @@ export const validateDataIntegrity = (c: IntegrityContext): IntegrityIssue[] => 
 };
 
 export const hasBlockingIntegrityIssues = (issues: IntegrityIssue[]): boolean =>
-  issues.some((issue) => issue.severity === 'ERROR');
+  issues.some((issue) => issue.severity === 'BLOCKER');

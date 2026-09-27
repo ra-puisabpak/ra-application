@@ -1,0 +1,16 @@
+{
+  "name": "puisabpak-ra-application",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/**/*.test.mjs",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply ra-application --local",
+    "db:migrate": "wrangler d1 migrations apply ra-application --remote"
+  },
+  "devDependencies": {
+    "wrangler": "^4.38.0"
+  }
+}
