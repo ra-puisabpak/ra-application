@@ -58,7 +58,13 @@ export default {
     const id = requestId(request);
     if (request.method === 'GET' && url.pathname === '/health') return json({ ok: true, requestId: id });
 
-    // Static UI assets remain publicly renderable; application APIs below require Access identity.\n    if (env.ASSETS && (request.method === 'GET' || request.method === 'HEAD') && !url.pathname.startsWith('/auth/') && !url.pathname.startsWith('/products') && !url.pathname.startsWith('/evidence') && !url.pathname.startsWith('/files/') && !url.pathname.startsWith('/approvals/') && !url.pathname.startsWith('/tasks') && !url.pathname.startsWith('/dashboard')) {\n      return env.ASSETS.fetch(request);\n    }\n\n    const actor = await authenticatedActor(request, env);\n    const unauthorized = protectedRoute(actor, id);
+    // Static UI assets remain publicly renderable; application APIs below require Access identity.
+    if (env.ASSETS && (request.method === 'GET' || request.method === 'HEAD') && !url.pathname.startsWith('/auth/') && !url.pathname.startsWith('/products') && !url.pathname.startsWith('/evidence') && !url.pathname.startsWith('/files/') && !url.pathname.startsWith('/approvals/') && !url.pathname.startsWith('/tasks') && !url.pathname.startsWith('/dashboard')) {
+      return env.ASSETS.fetch(request);
+    }
+
+    const actor = await authenticatedActor(request, env);
+    const unauthorized = protectedRoute(actor, id);
     if (unauthorized || !actor) return unauthorized!;
     if (request.method === 'GET' && url.pathname === '/auth/me') return json({ data: actor, requestId: id });
 
