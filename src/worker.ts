@@ -167,8 +167,11 @@ export default {
       if (!requireRole(actor, ['RA', 'QA', 'QC', 'DCC', 'R&D'])) return json({ error: { code: 'FORBIDDEN', message: 'Evidence upload role required' }, requestId: id }, 403);
       const evidence = await env.DB.prepare('SELECT storage_key FROM evidence WHERE id = ? AND uploaded_by = ?').bind(upload[1], actor.id).first<{ storage_key: string }>();
       if (!evidence) return json({ error: { code: 'NOT_FOUND', message: 'Evidence record not found or not owned by actor' }, requestId: id }, 404);
-      await env.EVIDENCE.put(evidence.storage_key, request.body, { httpMetadata: { contentType: request.headers.get('content-type') ?? 'application/octet-stream' } });
-      await env.DB.prepare("UPDATE evidence SET verification_status = 'PENDING_VERIFICATION', size_bytes = ? WHERE id = ?").bind(Number(request.headers.get('content-length')) || null, upload[1]).run();
+      const bytes = await request.arrayBuffer();
+      const digest = await crypto.subtle.digest('SHA-256', bytes);
+      const checksum = Array.from(new Uint8Array(digest)).map((value) => value.toString(16).padStart(2, '0')).join('');
+      await env.EVIDENCE.put(evidence.storage_key, bytes, { httpMetadata: { contentType: request.headers.get('content-type') ?? 'application/octet-stream' } });
+      await env.DB.prepare("UPDATE evidence SET verification_status = 'PENDING_VERIFICATION', size_bytes = ?, checksum = ? WHERE id = ?").bind(bytes.byteLength, checksum, upload[1]).run();
       await audit(env, actor, id, 'UPLOAD', 'EVIDENCE', upload[1]);
       return json({ data: { evidenceId: upload[1], status: 'PENDING_VERIFICATION' }, requestId: id });
     }
