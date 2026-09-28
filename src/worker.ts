@@ -414,6 +414,24 @@ export default {
     }
 
 
+    if (request.method === 'GET' && url.pathname === '/audit') {
+      const recordType = url.searchParams.get('recordType');
+      const recordId = url.searchParams.get('recordId');
+      const limit = Math.min(Math.max(Number(url.searchParams.get('limit') ?? 50), 1), 100);
+      let sql = 'SELECT id, actor_id, actor_role, occurred_at, action, module, record_type, record_id, previous_state, new_state, reason, request_id FROM audit_events';
+      const params: string[] = [];
+      if (recordType && recordId) {
+        sql += ' WHERE record_type = ? AND record_id = ?';
+        params.push(recordType, recordId);
+      } else if (recordType) {
+        sql += ' WHERE record_type = ?';
+        params.push(recordType);
+      }
+      sql += ' ORDER BY occurred_at DESC LIMIT ?';
+      const rows = await env.DB.prepare(sql).bind(...params, limit).all();
+      return json({ data: rows.results, requestId: id });
+    }
+
     const formulaValidateRoute = url.pathname.match(/^\/products\/([a-f0-9-]+)\/formulas\/validate$/);
     if (request.method === 'POST' && formulaValidateRoute) {
       if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
