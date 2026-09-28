@@ -414,6 +414,86 @@ export default {
     }
 
 
+    const documentRevisionCreate = url.pathname.match(/^\/documents\/([^/]+)\/revisions$/);
+    if (request.method === 'POST' && documentRevisionCreate) {
+      if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
+      if (!requireRole(actor, ['DCC', 'RA'])) return json({ error: { code: 'FORBIDDEN', message: 'DCC or RA role required' }, requestId: id }, 403);
+      const documentId = documentRevisionCreate[1];
+      const document = await env.DB.prepare('SELECT id, revision, status FROM documents WHERE id = ?').bind(documentId).first<{ id: string; revision: string; status: string }>();
+      if (!document) return json({ error: { code: 'NOT_FOUND', message: 'Document not found' }, requestId: id }, 404);
+      const input = await body<{ revision?: string; change_description?: string }>(request);
+      if (!input?.revision?.trim()) return json({ error: { code: 'VALIDATION_ERROR', message: 'revision is required' }, requestId: id }, 400);
+      const revision = input.revision.trim();
+      if (await env.DB.prepare('SELECT id FROM document_revisions WHERE document_id = ? AND revision = ?').bind(documentId, revision).first()) {
+        return json({ error: { code: 'CONFLICT', message: 'Revision already exists' }, requestId: id }, 409);
+      }
+      const revisionId = crypto.randomUUID();
+      await env.DB.batch([
+        env.DB.prepare('INSERT INTO document_revisions (id, document_id, revision, change_description, status, created_by) VALUES (?, ?, ?, ?, \'DRAFT\', ?)').bind(revisionId, documentId, revision, input.change_description?.trim() || null, actor.id),
+        env.DB.prepare('INSERT INTO audit_events (id, actor_id, actor_role, action, module, record_type, record_id, new_state, reason, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), actor.id, actorRole(actor), 'CREATE_REVISION', 'DOCUMENT_CONTROL', 'DOCUMENT', documentId, 'DRAFT', input.change_description?.trim() || null, id),
+      ]);
+      return json({ data: { id: revisionId, documentId, revision, status: 'DRAFT' }, requestId: id }, 201);
+    }
+
+    const documentSubmit = url.pathname.match(/^\/documents\/([^/]+)\/revisions\/([^/]+)\/submit$/);
+    if (request.method === 'POST' && documentSubmit) {
+      if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
+      if (!requireRole(actor, ['DCC', 'RA'])) return json({ error: { code: 'FORBIDDEN', message: 'DCC or RA role required' }, requestId: id }, 403);
+      const documentId = documentSubmit[1], revision = documentSubmit[2];
+      const input = await body<{ required_role?: string }>(request);
+      const requiredRole = input?.required_role?.trim();
+      const allowedRoles = ['RA','QA','QC','DCC','R&D','MANAGEMENT'];
+      if (!requiredRole || !allowedRoles.includes(requiredRole)) return json({ error: { code: 'VALIDATION_ERROR', message: 'required_role is required and must be a supported role' }, requestId: id }, 400);
+      const revisionRow = await env.DB.prepare('SELECT id, status FROM document_revisions WHERE document_id = ? AND revision = ?').bind(documentId, revision).first<{ id: string; status: string }>();
+      if (!revisionRow) return json({ error: { code: 'NOT_FOUND', message: 'Document revision not found' }, requestId: id }, 404);
+      if (revisionRow.status !== 'DRAFT') return json({ error: { code: 'INVALID_STATE', message: 'Only DRAFT revisions can be submitted' }, requestId: id }, 409);
+      const pending = await env.DB.prepare("SELECT id FROM document_approval_steps WHERE document_id = ? AND revision = ? AND status IN ('PENDING','WAITING')").bind(documentId, revision).first();
+      if (pending) return json({ error: { code: 'CONFLICT', message: 'Document revision already has an approval workflow' }, requestId: id }, 409);
+      await env.DB.batch([
+        env.DB.prepare("UPDATE document_revisions SET status = 'PENDING_APPROVAL' WHERE id = ?").bind(revisionRow.id),
+        env.DB.prepare("INSERT INTO document_approval_steps (id, document_id, revision, sequence, required_role, status) VALUES (?, ?, ?, 1, ?, 'PENDING')").bind(crypto.randomUUID(), documentId, revision, requiredRole),
+        env.DB.prepare('INSERT INTO audit_events (id, actor_id, actor_role, action, module, record_type, record_id, previous_state, new_state, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), actor.id, actorRole(actor), 'SUBMIT', 'DOCUMENT_CONTROL', 'DOCUMENT', documentId, 'DRAFT', 'PENDING_APPROVAL', id),
+      ]);
+      return json({ data: { documentId, revision, status: 'PENDING_APPROVAL', requiredRole }, requestId: id });
+    }
+
+    const documentDecision = url.pathname.match(/^\/approvals\/DOCUMENT\/([^/]+)\/([^/]+)\/(approve|reject|return)$/);
+    if (request.method === 'POST' && documentDecision) {
+      if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
+      const [documentId, revision, action] = [documentDecision[1], documentDecision[2], documentDecision[3]];
+      const revisionRow = await env.DB.prepare('SELECT id, status FROM document_revisions WHERE document_id = ? AND revision = ?').bind(documentId, revision).first<{ id: string; status: string }>();
+      if (!revisionRow) return json({ error: { code: 'NOT_FOUND', message: 'Document revision not found' }, requestId: id }, 404);
+      if (revisionRow.status !== 'PENDING_APPROVAL') return json({ error: { code: 'INVALID_STATE', message: 'Document revision is not pending approval' }, requestId: id }, 409);
+      const step = await env.DB.prepare("SELECT id, required_role, status FROM document_approval_steps WHERE document_id = ? AND revision = ? AND status = 'PENDING' ORDER BY sequence LIMIT 1").bind(documentId, revision).first<{ id: string; required_role: string; status: string }>();
+      if (!step) return json({ error: { code: 'APPROVAL_STEP_REQUIRED', message: 'No pending document approval step exists' }, requestId: id }, 409);
+      if (!actor.roles.some((grant) => grant.role === step.required_role && grant.canApprove)) return json({ error: { code: 'APPROVER_NOT_AUTHORIZED', message: 'Actor cannot decide this document approval step' }, requestId: id }, 403);
+      const input = await body<DecisionInput>(request);
+      if ((action === 'reject' || action === 'return') && !input?.comment?.trim()) return json({ error: { code: 'VALIDATION_ERROR', message: 'A comment is required for reject or return' }, requestId: id }, 400);
+      if (action === 'approve') {
+        await env.DB.batch([
+          env.DB.prepare("UPDATE document_approval_steps SET status = 'APPROVED', approver_id = ?, decided_at = CURRENT_TIMESTAMP, comment = ? WHERE id = ? AND status = 'PENDING'").bind(actor.id, input?.comment?.trim() || null, step.id),
+          env.DB.prepare("UPDATE document_revisions SET status = 'APPROVED', approved_by = ?, approved_at = CURRENT_TIMESTAMP WHERE id = ?").bind(actor.id, revisionRow.id),
+          env.DB.prepare("UPDATE documents SET revision = ?, status = 'CONTROLLED', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(revision, documentId),
+          env.DB.prepare('INSERT INTO audit_events (id, actor_id, actor_role, action, module, record_type, record_id, new_state, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), actor.id, actorRole(actor), 'APPROVE', 'DOCUMENT_CONTROL', 'DOCUMENT', documentId, 'CONTROLLED', id),
+        ]);
+        return json({ data: { documentId, revision, status: 'APPROVED' }, requestId: id });
+      }
+      const terminal = action === 'reject' ? 'REJECTED' : 'RETURNED';
+      await env.DB.batch([
+        env.DB.prepare("UPDATE document_approval_steps SET status = ?, approver_id = ?, decided_at = CURRENT_TIMESTAMP, comment = ? WHERE id = ? AND status = 'PENDING'").bind(terminal, actor.id, input!.comment!.trim(), step.id),
+        env.DB.prepare("UPDATE document_revisions SET status = 'DRAFT' WHERE id = ?").bind(revisionRow.id),
+        env.DB.prepare('INSERT INTO audit_events (id, actor_id, actor_role, action, module, record_type, record_id, previous_state, new_state, reason, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), actor.id, actorRole(actor), action.toUpperCase(), 'DOCUMENT_CONTROL', 'DOCUMENT', documentId, 'PENDING_APPROVAL', 'DRAFT', input!.comment!.trim(), id),
+      ]);
+      return json({ data: { documentId, revision, status: 'DRAFT', decision: terminal }, requestId: id });
+    }
+
+    if (request.method === 'GET' && url.pathname.match(/^\/approvals\/DOCUMENT\/[^/]+\/[^/]+$/)) {
+      const parts = url.pathname.split('/');
+      const documentId = parts[2], revision = parts[3];
+      const rows = await env.DB.prepare('SELECT id, document_id, revision, sequence, required_role, status, approver_id, decided_at, comment, created_at FROM document_approval_steps WHERE document_id = ? AND revision = ? ORDER BY sequence').bind(documentId, revision).all();
+      return json({ data: rows.results, requestId: id });
+    }
+
     if (request.method === 'GET' && url.pathname.match(/^\/documents\/[^/]+\/obsolete-history$/)) {
       const documentId = url.pathname.split('/')[2];
       const rows = await env.DB.prepare('SELECT * FROM document_obsolete_events WHERE document_id = ? ORDER BY obsolete_at DESC').bind(documentId).all();
