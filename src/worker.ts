@@ -414,6 +414,86 @@ export default {
     }
 
 
+    const docChangeCreate = url.pathname.match(/^\/documents\/([^/]+)\/changes$/);
+    if (request.method === 'POST' && docChangeCreate) {
+      if (!actor) return json({ error:{code:'UNAUTHENTICATED',message:'Login required'},requestId:id },401);
+      if (!requireRole(actor,['DCC','RA'])) return json({error:{code:'FORBIDDEN',message:'DCC or RA role required'},requestId:id},403);
+      const documentId=docChangeCreate[1]; const doc=await env.DB.prepare('SELECT id,revision FROM documents WHERE id=?').bind(documentId).first<{id:string;revision:string}>();
+      if(!doc)return json({error:{code:'NOT_FOUND',message:'Document not found'},requestId:id},404);
+      const input=await body<{to_revision?:string;reason?:string}>(request);
+      if(!input?.to_revision?.trim()||!input.reason?.trim())return json({error:{code:'VALIDATION_ERROR',message:'to_revision and reason are required'},requestId:id},400);
+      const cid=crypto.randomUUID();
+      await env.DB.batch([
+        env.DB.prepare("INSERT INTO document_change_requests (id,document_id,from_revision,to_revision,reason,status,requested_by) VALUES (?,?,?,?,?,'OPEN',?)").bind(cid,documentId,doc.revision,input.to_revision.trim(),input.reason.trim(),actor.id),
+        env.DB.prepare('INSERT INTO audit_events (id,actor_id,actor_role,action,module,record_type,record_id,new_state,reason,request_id) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),actor.id,actorRole(actor),'CREATE_CHANGE_REQUEST','DOCUMENT_CONTROL','DOCUMENT',documentId,'OPEN',input.reason.trim(),id)
+      ]);
+      return json({data:{id:cid,documentId,status:'OPEN'},requestId:id},201);
+    }
+    const docChangeDecision=url.pathname.match(/^\/documents\/([^/]+)\/changes\/([^/]+)\/(approve|reject|cancel)$/);
+    if(request.method==='POST'&&docChangeDecision){
+      if(!actor)return json({error:{code:'UNAUTHENTICATED',message:'Login required'},requestId:id},401);
+      const [documentId,changeId,action]=[docChangeDecision[1],docChangeDecision[2],docChangeDecision[3]];
+      const ch=await env.DB.prepare('SELECT id,status,reason FROM document_change_requests WHERE id=? AND document_id=?').bind(changeId,documentId).first<{id:string;status:string;reason:string}>();
+      if(!ch)return json({error:{code:'NOT_FOUND',message:'Change request not found'},requestId:id},404);
+      if(ch.status!=='OPEN')return json({error:{code:'INVALID_STATE',message:'Only OPEN change requests can be decided'},requestId:id},409);
+      if(action==='approve'&&!actor.roles.some(r=>r.canApprove))return json({error:{code:'APPROVER_NOT_AUTHORIZED',message:'Actor cannot approve change requests'},requestId:id},403);
+      const next=action==='approve'?'APPROVED':action==='reject'?'REJECTED':'CANCELLED';
+      await env.DB.batch([
+        env.DB.prepare("UPDATE document_change_requests SET status=?,decided_by=?,decided_at=CURRENT_TIMESTAMP WHERE id=? AND status='OPEN'").bind(next,actor.id,changeId),
+        env.DB.prepare('INSERT INTO audit_events (id,actor_id,actor_role,action,module,record_type,record_id,previous_state,new_state,reason,request_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),actor.id,actorRole(actor),'CHANGE_REQUEST_'+action.toUpperCase(),'DOCUMENT_CONTROL','DOCUMENT',documentId,'OPEN',next,ch.reason,id)
+      ]);
+      return json({data:{id:changeId,status:next},requestId:id});
+    }
+    if(request.method==='GET'&&url.pathname.match(/^\/documents\/[^/]+\/changes$/)){const documentId=url.pathname.split('/')[2];const rows=await env.DB.prepare('SELECT * FROM document_change_requests WHERE document_id=? ORDER BY created_at DESC').bind(documentId).all();return json({data:rows.results,requestId:id});}
+
+    const documentRevisionCreate = url.pathname.match(/^\/documents\/([^/]+)\/revisions$/);    const docSubmit=url.pathname.match(/^\/documents\/([^/]+)\/revisions\/([^/]+)\/submit$/);
+    if(request.method==='POST'&&docSubmit){
+      if(!actor)return json({error:{code:'UNAUTHENTICATED',message:'Login required'},requestId:id},401);
+      if(!requireRole(actor,['DCC','RA']))return json({error:{code:'FORBIDDEN',message:'DCC or RA role required'},requestId:id},403);
+      const documentId=docSubmit[1],revision=docSubmit[2]; const input=await body<{required_role?:string}>(request);
+      const role=input?.required_role?.trim()?.toUpperCase(); const allowed=['RA','QA','QC','DCC','R&D','MANAGEMENT'];
+      if(!role||!allowed.includes(role))return json({error:{code:'VALIDATION_ERROR',message:'required_role is required'},requestId:id},400);
+      const rev=await env.DB.prepare('SELECT id,status,change_request_id FROM document_revisions WHERE document_id=? AND revision=?').bind(documentId,revision).first<{id:string;status:string;change_request_id:string|null}>();
+      if(!rev)return json({error:{code:'NOT_FOUND',message:'Document revision not found'},requestId:id},404);
+      if(rev.status!=='DRAFT')return json({error:{code:'INVALID_STATE',message:'Only DRAFT revisions can be submitted'},requestId:id},409);
+      if(rev.change_request_id){const cr=await env.DB.prepare('SELECT status FROM document_change_requests WHERE id=?').bind(rev.change_request_id).first<{status:string}>();if(!cr||cr.status!=='APPROVED')return json({error:{code:'CHANGE_REQUEST_REQUIRED',message:'Linked change request must be APPROVED'},requestId:id},409);}
+      await env.DB.batch([
+        env.DB.prepare("UPDATE document_revisions SET status='PENDING_APPROVAL' WHERE id=?").bind(rev.id),
+        env.DB.prepare("INSERT INTO document_approval_steps (id,document_id,revision,sequence,required_role,status) VALUES (?,?,?,1,?,'PENDING')").bind(crypto.randomUUID(),documentId,revision,role),
+        env.DB.prepare("INSERT INTO audit_events (id,actor_id,actor_role,action,module,record_type,record_id,previous_state,new_state,request_id) VALUES (?,?,?,?,?,?,?,?,?,?)").bind(crypto.randomUUID(),actor.id,actorRole(actor),'SUBMIT','DOCUMENT_CONTROL','DOCUMENT',documentId,'DRAFT','PENDING_APPROVAL',id)
+      ]);
+      return json({data:{documentId,revision,status:'PENDING_APPROVAL'},requestId:id});
+    }
+    const docApproval=url.pathname.match(/^\/approvals\/DOCUMENT\/([^/]+)\/([^/]+)\/(approve|reject|return)$/);
+    if(request.method==='POST'&&docApproval){
+      if(!actor)return json({error:{code:'UNAUTHENTICATED',message:'Login required'},requestId:id},401);
+      const [documentId,revision,action]=[docApproval[1],docApproval[2],docApproval[3]];
+      const rev=await env.DB.prepare('SELECT id,status FROM document_revisions WHERE document_id=? AND revision=?').bind(documentId,revision).first<{id:string;status:string}>();
+      if(!rev)return json({error:{code:'NOT_FOUND',message:'Document revision not found'},requestId:id},404);
+      if(rev.status!=='PENDING_APPROVAL')return json({error:{code:'INVALID_STATE',message:'Document revision is not pending approval'},requestId:id},409);
+      const step=await env.DB.prepare("SELECT id,required_role FROM document_approval_steps WHERE document_id=? AND revision=? AND status='PENDING' ORDER BY sequence LIMIT 1").bind(documentId,revision).first<{id:string;required_role:string}>();
+      if(!step)return json({error:{code:'APPROVAL_STEP_REQUIRED',message:'No pending approval step exists'},requestId:id},409);
+      if(!actor.roles.some(r=>r.role===step.required_role&&r.canApprove))return json({error:{code:'APPROVER_NOT_AUTHORIZED',message:'Actor cannot decide this approval step'},requestId:id},403);
+      const input=await body<DecisionInput>(request); if((action==='reject'||action==='return')&&!input?.comment?.trim())return json({error:{code:'VALIDATION_ERROR',message:'A comment is required'},requestId:id},400);
+      if(action==='approve'){
+        await env.DB.batch([
+          env.DB.prepare("UPDATE document_approval_steps SET status='APPROVED',approver_id=?,decided_at=CURRENT_TIMESTAMP,comment=? WHERE id=? AND status='PENDING'").bind(actor.id,input?.comment?.trim()||null,step.id),
+          env.DB.prepare("UPDATE document_revisions SET status='APPROVED',approved_by=?,approved_at=CURRENT_TIMESTAMP WHERE id=?").bind(actor.id,rev.id),
+          env.DB.prepare("UPDATE documents SET revision=?,status='CONTROLLED',updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(revision,documentId),
+          env.DB.prepare("INSERT INTO audit_events (id,actor_id,actor_role,action,module,record_type,record_id,new_state,request_id) VALUES (?,?,?,?,?,?,?, ?,?)").bind(crypto.randomUUID(),actor.id,actorRole(actor),'APPROVE','DOCUMENT_CONTROL','DOCUMENT',documentId,'CONTROLLED',id)
+        ]);
+        return json({data:{documentId,revision,status:'APPROVED'},requestId:id});
+      }
+      const terminal=action==='reject'?'REJECTED':'RETURNED';
+      await env.DB.batch([
+        env.DB.prepare("UPDATE document_approval_steps SET status=?,approver_id=?,decided_at=CURRENT_TIMESTAMP,comment=? WHERE id=? AND status='PENDING'").bind(terminal,actor.id,input!.comment!.trim(),step.id),
+        env.DB.prepare("UPDATE document_revisions SET status='DRAFT' WHERE id=?").bind(rev.id),
+        env.DB.prepare("INSERT INTO audit_events (id,actor_id,actor_role,action,module,record_type,record_id,previous_state,new_state,reason,request_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)").bind(crypto.randomUUID(),actor.id,actorRole(actor),action.toUpperCase(),'DOCUMENT_CONTROL','DOCUMENT',documentId,'PENDING_APPROVAL','DRAFT',input!.comment!.trim(),id)
+      ]);
+      return json({data:{documentId,revision,status:'DRAFT',decision:terminal},requestId:id});
+    }
+    if(request.method==='GET'&&url.pathname.match(/^\/approvals\/DOCUMENT\/[^/]+\/[^/]+$/)){const p=url.pathname.split('/');const rows=await env.DB.prepare('SELECT * FROM document_approval_steps WHERE document_id=? AND revision=? ORDER BY sequence').bind(p[2],p[3]).all();return json({data:rows.results,requestId:id});}
+
     if (request.method === 'GET' && url.pathname.match(/^\/documents\/[^/]+\/obsolete-history$/)) {
       const documentId = url.pathname.split('/')[2];
       const rows = await env.DB.prepare('SELECT * FROM document_obsolete_events WHERE document_id = ? ORDER BY obsolete_at DESC').bind(documentId).all();
