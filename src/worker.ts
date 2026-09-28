@@ -10,6 +10,36 @@ type Product = { id: string; productCode: string; thaiName: string; englishName:
 type ProductInput = { productCode?: string; thaiName?: string; englishName?: string; siteId?: string; expectedVersion?: number };
 type EvidenceInput = { recordType?: string; recordId?: string; title?: string; revision?: string; contentType?: string };
 type DecisionInput = { comment?: string };
+type Ingredient = { ingredient_name: string; percentage: number };
+type FormulaInput = { formula_code?: string; formula_name?: string; ingredients_json?: Ingredient[] };
+type FormulaRow = { id: string; product_id: string; formula_code: string; formula_name: string; ingredients_json: string; validation_score: number; validation_status: string; created_at?: string; updated_at?: string };
+
+function validateFormulaIngredients(ingredients: unknown): { isValid: boolean; score: number; errors: string[] } {
+  const errors: string[] = [];
+  if (!Array.isArray(ingredients)) return { isValid: false, score: 0, errors: ['Ingredients must be an array'] };
+  if (ingredients.length === 0) return { isValid: false, score: 0, errors: ['At least one ingredient is required'] };
+  let totalPercentage = 0;
+  for (let index = 0; index < ingredients.length; index++) {
+    const item = ingredients[index] as Record<string, unknown>;
+    if (!item.ingredient_name || typeof item.ingredient_name !== 'string' || !item.ingredient_name.trim()) errors.push('Ingredient ' + (index + 1) + ': ingredient_name is required');
+    if (item.percentage === undefined || item.percentage === null) errors.push('Ingredient ' + (index + 1) + ': percentage is required');
+    else if (typeof item.percentage !== 'number' || Number.isNaN(item.percentage) || item.percentage < 0) errors.push('Ingredient ' + (index + 1) + ': percentage must be a non-negative number');
+    else totalPercentage += Number(item.percentage);
+  }
+  const score = totalPercentage === 100 ? 100 : Math.round(totalPercentage);
+  const isValid = errors.length === 0 && totalPercentage === 100;
+  if (!isValid && totalPercentage !== 100) errors.push('Total percentage is ' + totalPercentage + '%, must be exactly 100%');
+  return { isValid, score, errors };
+}
+function parseIngredientsJson(jsonString: string): Ingredient[] | null {
+  try {
+    const parsed = JSON.parse(jsonString);
+    if (!Array.isArray(parsed)) return null;
+    const valid = parsed.every((item) => item && typeof item.ingredient_name === 'string' && typeof item.percentage === 'number' && !Number.isNaN(item.percentage));
+    return valid ? (parsed as Ingredient[]) : null;
+  } catch { return null; }
+}
+
 
 const previewActor: Actor = { id: 'preview', email: 'preview@puisabpak.local', roles: [] };
 
@@ -287,6 +317,82 @@ export default {
         env.DB.prepare('INSERT INTO audit_events (id, actor_id, actor_role, action, module, record_type, record_id, previous_state, new_state, reason, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), actor.id, actorRole(actor), action.toUpperCase(), 'REGULATORY_AFFAIRS', 'PRODUCT', productId, product.state, terminalState, input!.comment!.trim(), id),
       ]);
       return json({ data: { productId, state: terminalState }, requestId: id });
+    }
+
+
+    const formulaValidateRoute = url.pathname.match(/^\/products\/([a-f0-9-]+)\/formulas\/validate$/);
+    if (request.method === 'POST' && formulaValidateRoute) {
+      if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
+      if (!requireRole(actor, ['RA', 'R&D', 'QA'])) return json({ error: { code: 'FORBIDDEN', message: 'RA, R&D or QA role required' }, requestId: id }, 403);
+      const productId = formulaValidateRoute[1];
+      const product = await env.DB.prepare('SELECT id FROM products WHERE id = ?').bind(productId).first<{ id: string }>();
+      if (!product) return json({ error: { code: 'NOT_FOUND', message: 'Product not found' }, requestId: id }, 404);
+      const input = await body<FormulaInput>(request);
+      if (!input || !input.formula_code?.trim() || !input.formula_name?.trim() || !input.ingredients_json) return json({ error: { code: 'VALIDATION_ERROR', message: 'formula_code, formula_name and ingredients_json are required' }, requestId: id }, 400);
+      const validation = validateFormulaIngredients(input.ingredients_json);
+      if (!validation.isValid) return json({ success: false, error: { code: 'FORMULA_VALIDATION_FAILED', message: 'Formula validation failed', errors: validation.errors, validation_score: validation.score }, requestId: id }, 400);
+      const formulaId = crypto.randomUUID();
+      try {
+        await env.DB.batch([
+          env.DB.prepare('INSERT INTO formula_control (id, product_id, formula_code, formula_name, ingredients_json, validation_score, validation_status, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(formulaId, productId, input.formula_code.trim(), input.formula_name.trim(), JSON.stringify(input.ingredients_json), validation.score, 'VALIDATED_100_PERCENT', actor.id),
+          env.DB.prepare('INSERT INTO audit_events (id, actor_id, actor_role, action, module, record_type, record_id, new_state, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), actor.id, actorRole(actor), 'VALIDATE_FORMULA', 'REGULATORY_AFFAIRS', 'FORMULA', formulaId, 'VALIDATED_100_PERCENT', id),
+        ]);
+      } catch (error: any) {
+        if (String(error?.message ?? '').includes('UNIQUE')) return json({ error: { code: 'CONFLICT', message: 'Formula code already exists for this product' }, requestId: id }, 409);
+        console.error('VALIDATE_FORMULA_FAILED', error);
+        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to create formula' }, requestId: id }, 500);
+      }
+      const created = await env.DB.prepare('SELECT id, product_id, formula_code, formula_name, ingredients_json, validation_score, validation_status FROM formula_control WHERE id = ?').bind(formulaId).first<FormulaRow>();
+      if (!created) return json({ error: { code: 'NOT_FOUND', message: 'Formula record not found after create' }, requestId: id }, 404);
+      return json({ success: true, data: { id: created.id, product_id: created.product_id, formula_code: created.formula_code, formula_name: created.formula_name, ingredients_json: parseIngredientsJson(created.ingredients_json) ?? [], validation_score: created.validation_score, validation_status: created.validation_status, message: 'สูตรได้รับการตรวจสอบ 100% เรียบร้อย' }, requestId: id }, 201);
+    }
+
+    const formulaPatchRoute = url.pathname.match(/^\/products\/([a-f0-9-]+)\/formulas\/([a-f0-9-]+)$/);
+    if (request.method === 'PATCH' && formulaPatchRoute) {
+      if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
+      if (!requireRole(actor, ['RA', 'R&D', 'QA'])) return json({ error: { code: 'FORBIDDEN', message: 'RA, R&D or QA role required' }, requestId: id }, 403);
+      const productId = formulaPatchRoute[1], formulaId = formulaPatchRoute[2];
+      const product = await env.DB.prepare('SELECT id FROM products WHERE id = ?').bind(productId).first<{ id: string }>();
+      if (!product) return json({ error: { code: 'NOT_FOUND', message: 'Product not found' }, requestId: id }, 404);
+      const existing = await env.DB.prepare('SELECT id, product_id, formula_code, formula_name, ingredients_json, validation_status FROM formula_control WHERE id = ? AND product_id = ?').bind(formulaId, productId).first<FormulaRow>();
+      if (!existing) return json({ error: { code: 'NOT_FOUND', message: 'Formula not found' }, requestId: id }, 404);
+      const input = await body<FormulaInput>(request);
+      if (!input) return json({ error: { code: 'VALIDATION_ERROR', message: 'Request body is required' }, requestId: id }, 400);
+      const formulaName = input.formula_name?.trim() || existing.formula_name;
+      const ingredientList = input.ingredients_json ?? parseIngredientsJson(existing.ingredients_json) ?? [];
+      const validation = validateFormulaIngredients(ingredientList);
+      if (!validation.isValid) return json({ success: false, error: { code: 'FORMULA_VALIDATION_FAILED', message: 'Formula validation failed', errors: validation.errors, validation_score: validation.score }, requestId: id }, 400);
+      const previousStatus = existing.validation_status;
+      const nextStatus = validation.score === 100 ? 'VALIDATED_100_PERCENT' : 'REJECTED';
+      try {
+        await env.DB.batch([
+          env.DB.prepare('UPDATE formula_control SET formula_name = ?, ingredients_json = ?, validation_score = ?, validation_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(formulaName, JSON.stringify(ingredientList), validation.score, nextStatus, formulaId),
+          env.DB.prepare('INSERT INTO audit_events (id, actor_id, actor_role, action, module, record_type, record_id, previous_state, new_state, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), actor.id, actorRole(actor), 'UPDATE_FORMULA', 'REGULATORY_AFFAIRS', 'FORMULA', formulaId, previousStatus, nextStatus, id),
+        ]);
+      } catch (error: any) {
+        console.error('UPDATE_FORMULA_FAILED', error);
+        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to update formula' }, requestId: id }, 500);
+      }
+      const updated = await env.DB.prepare('SELECT id, product_id, formula_code, formula_name, ingredients_json, validation_score, validation_status, updated_at FROM formula_control WHERE id = ?').bind(formulaId).first<FormulaRow>();
+      if (!updated) return json({ error: { code: 'NOT_FOUND', message: 'Formula not found after update' }, requestId: id }, 404);
+      return json({ success: true, data: { id: updated.id, product_id: updated.product_id, formula_code: updated.formula_code, formula_name: updated.formula_name, ingredients_json: parseIngredientsJson(updated.ingredients_json) ?? [], validation_score: updated.validation_score, validation_status: updated.validation_status, updated_at: updated.updated_at, message: 'สูตรได้รับการอัปเดตและตรวจสอบ 100% เรียบร้อย' }, requestId: id });
+    }
+
+    const formulaGetDetailRoute = url.pathname.match(/^\/products\/([a-f0-9-]+)\/formulas\/([a-f0-9-]+)$/);
+    if (request.method === 'GET' && formulaGetDetailRoute) {
+      const productId = formulaGetDetailRoute[1], formulaId = formulaGetDetailRoute[2];
+      const formula = await env.DB.prepare('SELECT id, product_id, formula_code, formula_name, ingredients_json, validation_score, validation_status, created_at, updated_at FROM formula_control WHERE id = ? AND product_id = ?').bind(formulaId, productId).first<FormulaRow>();
+      if (!formula) return json({ error: { code: 'NOT_FOUND', message: 'Formula not found' }, requestId: id }, 404);
+      return json({ data: { id: formula.id, product_id: formula.product_id, formula_code: formula.formula_code, formula_name: formula.formula_name, ingredients_json: parseIngredientsJson(formula.ingredients_json) ?? [], validation_score: formula.validation_score, validation_status: formula.validation_status, created_at: formula.created_at, updated_at: formula.updated_at }, requestId: id });
+    }
+
+    const formulaListRoute = url.pathname.match(/^\/products\/([a-f0-9-]+)\/formulas$/);
+    if (request.method === 'GET' && formulaListRoute) {
+      const productId = formulaListRoute[1];
+      const product = await env.DB.prepare('SELECT id FROM products WHERE id = ?').bind(productId).first<{ id: string }>();
+      if (!product) return json({ error: { code: 'NOT_FOUND', message: 'Product not found' }, requestId: id }, 404);
+      const formulas = await env.DB.prepare('SELECT id, product_id, formula_code, formula_name, ingredients_json, validation_score, validation_status, created_at, updated_at FROM formula_control WHERE product_id = ? ORDER BY created_at DESC').bind(productId).all<FormulaRow>();
+      return json({ data: formulas.results.map((row) => ({ id: row.id, product_id: row.product_id, formula_code: row.formula_code, formula_name: row.formula_name, validation_score: row.validation_score, validation_status: row.validation_status, created_at: row.created_at, updated_at: row.updated_at, ingredients_json: parseIngredientsJson(row.ingredients_json) ?? [] })), requestId: id });
     }
 
     if (env.ASSETS) return env.ASSETS.fetch(request);
