@@ -414,6 +414,20 @@ export default {
     }
 
 
+    if (request.method === 'GET' && url.pathname === '/documents') {
+      const type = url.searchParams.get('type');
+      const department = url.searchParams.get('department');
+      let sql = 'SELECT id, document_code, document_name, document_type, department, revision, status, owner_id, created_at, updated_at FROM documents';
+      const conditions: string[] = [];
+      const params: string[] = [];
+      if (type) { conditions.push('document_type = ?'); params.push(type); }
+      if (department) { conditions.push('department = ?'); params.push(department); }
+      if (conditions.length) sql += ' WHERE ' + conditions.join(' AND ');
+      sql += ' ORDER BY document_type, document_code';
+      const rows = await env.DB.prepare(sql).bind(...params).all();
+      return json({ data: rows.results, requestId: id });
+    }
+
     if (request.method === 'GET' && url.pathname === '/audit') {
       const recordType = url.searchParams.get('recordType');
       const recordId = url.searchParams.get('recordId');
