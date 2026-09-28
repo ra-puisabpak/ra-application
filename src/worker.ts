@@ -109,21 +109,24 @@ const productFromRow = (row: Record<string, unknown>): Product => ({
 
 async function authenticatedActor(request: Request, env: Env): Promise<Actor | null> {
   const email = request.headers.get('cf-access-authenticated-user-email')?.trim().toLowerCase();
-  if (!email) return null;
 
-  try {
-    const user = await env.DB.prepare('SELECT id, email FROM users WHERE email = ? AND active = 1').bind(email).first<{ id: string; email: string }>();
-    if (!user) return null;
-    const roles = await env.DB.prepare('SELECT role, can_approve FROM user_roles WHERE user_id = ?').bind(user.id).all<{ role: string; can_approve: number }>();
-    return {
-      id: user.id,
-      email: user.email,
-      roles: roles.results.map((row) => ({ role: row.role, canApprove: row.can_approve === 1 })),
-    };
-  } catch (error) {
-    console.error('AUTH_LOOKUP_FAILED', { email, error });
-    return null;
+  if (email) {
+    try {
+      const user = await env.DB.prepare('SELECT id, email FROM users WHERE email = ? AND active = 1').bind(email).first<{ id: string; email: string }>();
+      if (user) {
+        const roles = await env.DB.prepare('SELECT role, can_approve FROM user_roles WHERE user_id = ?').bind(user.id).all<{ role: string; can_approve: number }>();
+        return {
+          id: user.id,
+          email: user.email,
+          roles: roles.results.map((row) => ({ role: row.role, canApprove: row.can_approve === 1 })),
+        };
+      }
+    } catch (error) {
+      console.error('AUTH_LOOKUP_FAILED', { email, error });
+    }
   }
+
+  return actorFromSession(request, env);
 }
 
 async function hasVerifiedEvidence(env: Env, recordType: string, recordId: string, revision: string): Promise<boolean> {
