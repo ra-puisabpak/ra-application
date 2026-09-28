@@ -357,12 +357,113 @@ export default {
       }, 201);
     }
 
+    // ========== UPDATE FORMULA API ==========
+    const formulaUpdateRoute = url.pathname.match(/^\/products\/([a-f0-9-]+)\/formulas\/([a-f0-9-]+)$/);
+    if (request.method === 'PATCH' && formulaUpdateRoute) {
+      if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
+      if (!requireRole(actor, ['RA', 'R&D', 'QA'])) return json({ error: { code: 'FORBIDDEN', message: 'RA, R&D or QA role required' }, requestId: id }, 403);
+
+      const [productId, formulaId] = [formulaUpdateRoute[1], formulaUpdateRoute[2]];
+      
+      const product = await env.DB.prepare('SELECT id FROM products WHERE id = ?').bind(productId).first<{ id: string }>();
+      if (!product) return json({ error: { code: 'NOT_FOUND', message: 'Product not found' }, requestId: id }, 404);
+
+      const existing = await env.DB.prepare(`
+        SELECT id, product_id, formula_code, validation_status, ingredients_json
+        FROM formula_control
+        WHERE id = ? AND product_id = ?
+      `).bind(formulaId, productId).first<Record<string, unknown>>();
+      
+      if (!existing) return json({ error: { code: 'NOT_FOUND', message: 'Formula not found' }, requestId: id }, 404);
+
+      const input = await body<FormulaInput>(request);
+      if (!input) return json({ error: { code: 'VALIDATION_ERROR', message: 'Request body is required' }, requestId: id }, 400);
+
+      const formula_name = input.formula_name?.trim() || existing.formula_name;
+      const ingredients_json = input.ingredients_json || JSON.parse(String(existing.ingredients_json));
+
+      const validation = validateFormulaIngredients(ingredients_json);
+
+      if (!validation.isValid) {
+        return json({
+          success: false,
+          error: {
+            code: 'FORMULA_VALIDATION_FAILED',
+            message: 'Formula validation failed',
+            errors: validation.errors,
+            validation_score: validation.score
+          },
+          requestId: id
+        }, 400);
+      }
+
+      const newStatus = validation.score === 100 ? 'VALIDATED_100_PERCENT' : 'REJECTED';
+      const ingredientsJsonStr = JSON.stringify(ingredients_json);
+      const previousStatus = existing.validation_status;
+
+      try {
+        await env.DB.batch([
+          env.DB.prepare(`
+            UPDATE formula_control
+            SET formula_name = ?, ingredients_json = ?, validation_score = ?, validation_status = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).bind(
+            formula_name,
+            ingredientsJsonStr,
+            validation.score,
+            newStatus,
+            formulaId
+          ),
+          env.DB.prepare(`
+            INSERT INTO audit_events (
+              id, actor_id, actor_role, action, module, record_type, record_id, previous_state, new_state, request_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).bind(
+            crypto.randomUUID(),
+            actor.id,
+            actorRole(actor),
+            'UPDATE_FORMULA',
+            'REGULATORY_AFFAIRS',
+            'FORMULA',
+            formulaId,
+            String(previousStatus),
+            newStatus,
+            id
+          )
+        ]);
+      } catch (error: any) {
+        console.error('UPDATE_FORMULA_FAILED', error);
+        return json({
+          error: { code: 'INTERNAL_ERROR', message: 'Failed to update formula' },
+          requestId: id
+        }, 500);
+      }
+
+      const updated = await env.DB.prepare(`
+        SELECT id, product_id, formula_code, formula_name, ingredients_json, validation_score, validation_status, updated_at
+        FROM formula_control
+        WHERE id = ?
+      `).bind(formulaId).first<Record<string, unknown>>();
+
+      return json({
+        success: validation.score === 100,
+        data: {
+          ...formulaFromRow(updated!),
+          formula_name: updated!.formula_name,
+          ingredients_json: JSON.parse(String(updated!.ingredients_json)),
+          updated_at: updated!.updated_at,
+          message: validation.score === 100 ? 'สูตรได้รับการอัปเดตและตรวจสอบ 100% เรียบร้อย' : 'สูตรได้รับการอัปเดต แต่ยังไม่ถูกต้อง'
+        },
+        requestId: id
+      });
+    }
+
     // ========== GET FORMULA DETAILS ==========
     const formulaRoute = url.pathname.match(/^\/products\/([a-f0-9-]+)\/formulas\/([a-f0-9-]+)$/);
     if (request.method === 'GET' && formulaRoute) {
       const [productId, formulaId] = [formulaRoute[1], formulaRoute[2]];
       const formula = await env.DB.prepare(`
-        SELECT id, product_id, formula_code, formula_name, ingredients_json, validation_score, validation_status, created_by, created_at
+        SELECT id, product_id, formula_code, formula_name, ingredients_json, validation_score, validation_status, created_by, created_at, updated_at
         FROM formula_control
         WHERE id = ? AND product_id = ?
       `).bind(formulaId, productId).first<Record<string, unknown>>();
@@ -374,7 +475,8 @@ export default {
           ...formulaFromRow(formula),
           formula_name: formula.formula_name,
           ingredients_json: JSON.parse(String(formula.ingredients_json)),
-          created_at: formula.created_at
+          created_at: formula.created_at,
+          updated_at: formula.updated_at
         },
         requestId: id
       });
@@ -387,7 +489,7 @@ export default {
       if (!product) return json({ error: { code: 'NOT_FOUND', message: 'Product not found' }, requestId: id }, 404);
 
       const formulas = await env.DB.prepare(`
-        SELECT id, product_id, formula_code, formula_name, validation_score, validation_status, created_at
+        SELECT id, product_id, formula_code, formula_name, validation_score, validation_status, created_at, updated_at
         FROM formula_control
         WHERE product_id = ?
         ORDER BY created_at DESC
@@ -397,7 +499,8 @@ export default {
         data: formulas.results.map(row => ({
           ...formulaFromRow(row),
           formula_name: row.formula_name,
-          created_at: row.created_at
+          created_at: row.created_at,
+          updated_at: row.updated_at
         })),
         requestId: id
       });
