@@ -10,6 +10,8 @@ type Product = { id: string; productCode: string; thaiName: string; englishName:
 type ProductInput = { productCode?: string; thaiName?: string; englishName?: string; siteId?: string; expectedVersion?: number };
 type EvidenceInput = { recordType?: string; recordId?: string; title?: string; revision?: string; contentType?: string };
 type DecisionInput = { comment?: string };
+type FormulaInput = { formula_code?: string; formula_name?: string; ingredients_json?: Array<{ ingredient_name?: string; percentage?: number }> };
+type FormulaValidationResult = { id: string; product_id: string; formula_code: string; validation_score: number; validation_status: string };
 
 const previewActor: Actor = { id: 'preview', email: 'preview@puisabpak.local', roles: [] };
 
@@ -27,12 +29,21 @@ const isApiRoute = (pathname: string): boolean => [
   '/approvals/',
   '/tasks',
   '/dashboard',
+  '/formulas',
 ].some((prefix) => pathname === prefix || pathname.startsWith(prefix));
 
 const productFromRow = (row: Record<string, unknown>): Product => ({
   id: String(row.id), productCode: String(row.product_code), thaiName: String(row.thai_name),
   englishName: row.english_name === null ? null : String(row.english_name), siteId: String(row.site_id),
   revision: String(row.revision), state: String(row.state), version: Number(row.version),
+});
+
+const formulaFromRow = (row: Record<string, unknown>): FormulaValidationResult => ({
+  id: String(row.id),
+  product_id: String(row.product_id),
+  formula_code: String(row.formula_code),
+  validation_score: Number(row.validation_score),
+  validation_status: String(row.validation_status),
 });
 
 async function authenticatedActor(request: Request, env: Env): Promise<Actor | null> {
@@ -63,6 +74,45 @@ async function hasVerifiedEvidence(env: Env, recordType: string, recordId: strin
 async function audit(env: Env, actor: Actor, id: string, action: string, recordType: string, recordId: string, previousState?: string, newState?: string): Promise<void> {
   await env.DB.prepare('INSERT INTO audit_events (id, actor_id, actor_role, action, module, record_type, record_id, previous_state, new_state, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
     .bind(crypto.randomUUID(), actor.id, actorRole(actor), action, 'REGULATORY_AFFAIRS', recordType, recordId, previousState ?? null, newState ?? null, id).run();
+}
+
+function validateFormulaIngredients(ingredients: unknown): { isValid: boolean; score: number; errors: string[] } {
+  const errors: string[] = [];
+
+  if (!Array.isArray(ingredients)) {
+    return { isValid: false, score: 0, errors: ['Ingredients must be an array'] };
+  }
+
+  if (ingredients.length === 0) {
+    return { isValid: false, score: 0, errors: ['At least one ingredient is required'] };
+  }
+
+  let totalPercentage = 0;
+
+  for (let i = 0; i < ingredients.length; i++) {
+    const ing = ingredients[i] as Record<string, unknown>;
+
+    if (!ing.ingredient_name || typeof ing.ingredient_name !== 'string' || !ing.ingredient_name.trim()) {
+      errors.push(`Ingredient ${i + 1}: ingredient_name is required and must be a non-empty string`);
+    }
+
+    if (ing.percentage === undefined || ing.percentage === null) {
+      errors.push(`Ingredient ${i + 1}: percentage is required`);
+    } else if (typeof ing.percentage !== 'number' || ing.percentage < 0) {
+      errors.push(`Ingredient ${i + 1}: percentage must be a non-negative number`);
+    } else {
+      totalPercentage += ing.percentage;
+    }
+  }
+
+  const score = totalPercentage === 100 ? 100 : Math.round(totalPercentage);
+  const isValid = errors.length === 0 && totalPercentage === 100;
+
+  if (!isValid && totalPercentage !== 100) {
+    errors.push(`Total percentage is ${totalPercentage}%, must be exactly 100%`);
+  }
+
+  return { isValid, score, errors };
 }
 
 const protectedRoute = (actor: Actor | null, id: string): Response | null => actor
@@ -112,7 +162,7 @@ export default {
     if (request.method === 'GET' && url.pathname === '/tasks') {
       const rows = await env.DB.prepare(`SELECT t.id, t.title, t.module, t.record_type, t.record_id, t.action, t.due_date, t.status, t.priority,
         CASE WHEN t.due_date IS NOT NULL AND t.due_date < date('now') AND t.status NOT IN ('COMPLETED','CANCELLED') THEN 1 ELSE 0 END AS overdue
-        FROM tasks t WHERE t.owner_id = ? ORDER BY overdue DESC, CASE t.priority WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'NORMAL' THEN 3 ELSE 4 END, t.due_date`).bind(effectiveActor.id).all();
+        FROM tasks t WHERE t.owner_id = ? ORDER BY overdue DESC, CASE t.priority WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'NORMAL' THEN 3 ELSE 4 END, t.due_date`).bind(effectiveActor.id).all<Record<string, unknown>>();
       return json({ data: rows.results, requestId: id });
     }
 
@@ -142,7 +192,7 @@ export default {
       const productStates = await env.DB.prepare('SELECT state, COUNT(*) AS count FROM products GROUP BY state ORDER BY state').all();
       const taskStates = await env.DB.prepare('SELECT status, COUNT(*) AS count FROM tasks WHERE owner_id = ? GROUP BY status ORDER BY status').bind(effectiveActor.id).all();
       const evidenceStates = await env.DB.prepare('SELECT verification_status AS status, COUNT(*) AS count FROM evidence GROUP BY verification_status ORDER BY verification_status').all();
-      const pendingApprovals = await env.DB.prepare("SELECT COUNT(*) AS count FROM approval_steps WHERE status = 'PENDING' AND required_role IN (SELECT role FROM user_roles WHERE user_id = ? AND can_approve = 1)").bind(effectiveActor.id).first<{ count: number }>();
+      const pendingApprovals = await env.DB.prepare("SELECT COUNT(*) AS count FROM approval_steps WHERE status = 'PENDING' AND required_role IN (SELECT role FROM user_roles WHERE user_id = ?)").bind(effectiveActor.id).first<{ count: number }>();
       return json({ data: {
         products: productStates.results,
         myTasks: taskStates.results,
@@ -200,14 +250,157 @@ export default {
       const product = await env.DB.prepare('SELECT id, revision, state FROM products WHERE id = ?').bind(submit[1]).first<{ id: string; revision: string; state: string }>();
       if (!product) return json({ error: { code: 'NOT_FOUND', message: 'Product not found' }, requestId: id }, 404);
       if (product.state !== 'DRAFT' && product.state !== 'RETURNED') return json({ error: { code: 'INVALID_STATE', message: 'Only DRAFT or RETURNED products can be submitted' }, requestId: id }, 409);
-      if (!await hasVerifiedEvidence(env, 'PRODUCT', product.id, product.revision)) return json({ error: { code: 'VERIFIED_EVIDENCE_REQUIRED', message: 'At least one verified evidence record is required before submission' }, requestId: id }, 409);
+      if (!await hasVerifiedEvidence(env, 'PRODUCT', product.id, product.revision)) return json({ error: { code: 'VERIFIED_EVIDENCE_REQUIRED', message: 'At least one verified evidence record is required' }, requestId: id }, 409);
       await env.DB.batch([
         env.DB.prepare("UPDATE products SET state = 'PENDING_APPROVAL', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(product.id),
         env.DB.prepare("INSERT INTO approval_steps (id, record_type, record_id, revision, sequence, required_role, status) VALUES (?, 'PRODUCT', ?, ?, 1, 'RA', 'PENDING')").bind(crypto.randomUUID(), product.id, product.revision),
         env.DB.prepare("INSERT INTO approval_steps (id, record_type, record_id, revision, sequence, required_role, status) VALUES (?, 'PRODUCT', ?, ?, 2, 'MANAGEMENT', 'WAITING')").bind(crypto.randomUUID(), product.id, product.revision),
-        env.DB.prepare('INSERT INTO audit_events (id, actor_id, actor_role, action, module, record_type, record_id, previous_state, new_state, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), actor.id, actorRole(actor), 'SUBMIT', 'REGULATORY_AFFAIRS', 'PRODUCT', product.id, product.state, 'PENDING_APPROVAL', id),
+        env.DB.prepare('INSERT INTO audit_events (id, actor_id, actor_role, action, module, record_type, record_id, previous_state, new_state, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), actor.id, actorRole(actor), 'SUBMIT', 'REGULATORY_AFFAIRS', 'PRODUCT', product.id, 'DRAFT', 'PENDING_APPROVAL', id),
       ]);
       return json({ data: { productId: product.id, revision: product.revision, state: 'PENDING_APPROVAL' }, requestId: id });
+    }
+
+    // ========== FORMULA VALIDATION API ==========
+    const formulaValidateRoute = url.pathname.match(/^\/products\/([a-f0-9-]+)\/formulas\/validate$/);
+    if (request.method === 'POST' && formulaValidateRoute) {
+      if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
+      if (!requireRole(actor, ['RA', 'R&D', 'QA'])) return json({ error: { code: 'FORBIDDEN', message: 'RA, R&D or QA role required' }, requestId: id }, 403);
+
+      const productId = formulaValidateRoute[1];
+      const product = await env.DB.prepare('SELECT id FROM products WHERE id = ?').bind(productId).first<{ id: string }>();
+      if (!product) return json({ error: { code: 'NOT_FOUND', message: 'Product not found' }, requestId: id }, 404);
+
+      const input = await body<FormulaInput>(request);
+      if (!input?.formula_code?.trim() || !input.formula_name?.trim() || !input.ingredients_json) {
+        return json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'formula_code, formula_name and ingredients_json are required'
+          },
+          requestId: id
+        }, 400);
+      }
+
+      const validation = validateFormulaIngredients(input.ingredients_json);
+
+      if (!validation.isValid) {
+        return json({
+          success: false,
+          error: {
+            code: 'FORMULA_VALIDATION_FAILED',
+            message: 'Formula validation failed',
+            errors: validation.errors,
+            validation_score: validation.score
+          },
+          requestId: id
+        }, 400);
+      }
+
+      const formulaId = crypto.randomUUID();
+      const ingredientsJson = JSON.stringify(input.ingredients_json);
+
+      try {
+        await env.DB.batch([
+          env.DB.prepare(`
+            INSERT INTO formula_control (
+              id, product_id, formula_code, formula_name, ingredients_json, validation_score, validation_status, created_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `).bind(
+            formulaId,
+            productId,
+            input.formula_code.trim(),
+            input.formula_name.trim(),
+            ingredientsJson,
+            validation.score,
+            validation.score === 100 ? 'VALIDATED_100_PERCENT' : 'REJECTED',
+            actor.id
+          ),
+          env.DB.prepare(`
+            INSERT INTO audit_events (
+              id, actor_id, actor_role, action, module, record_type, record_id, new_state, request_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).bind(
+            crypto.randomUUID(),
+            actor.id,
+            actorRole(actor),
+            'VALIDATE_FORMULA',
+            'REGULATORY_AFFAIRS',
+            'FORMULA',
+            formulaId,
+            validation.score === 100 ? 'VALIDATED_100_PERCENT' : 'REJECTED',
+            id
+          )
+        ]);
+      } catch (error: any) {
+        if (error.message?.includes('UNIQUE')) {
+          return json({
+            error: { code: 'CONFLICT', message: 'Formula code already exists for this product' },
+            requestId: id
+          }, 409);
+        }
+        throw error;
+      }
+
+      const created = await env.DB.prepare(`
+        SELECT id, product_id, formula_code, validation_score, validation_status
+        FROM formula_control
+        WHERE id = ?
+      `).bind(formulaId).first<Record<string, unknown>>();
+
+      return json({
+        success: validation.score === 100,
+        data: {
+          ...formulaFromRow(created!),
+          message: validation.score === 100 ? 'สูตรได้รับการตรวจสอบ 100% เรียบร้อย' : 'สูตรไม่ถูกต้อง โปรดตรวจสอบข้อมูลใหม่'
+        },
+        requestId: id
+      }, 201);
+    }
+
+    // ========== GET FORMULA DETAILS ==========
+    const formulaRoute = url.pathname.match(/^\/products\/([a-f0-9-]+)\/formulas\/([a-f0-9-]+)$/);
+    if (request.method === 'GET' && formulaRoute) {
+      const [productId, formulaId] = [formulaRoute[1], formulaRoute[2]];
+      const formula = await env.DB.prepare(`
+        SELECT id, product_id, formula_code, formula_name, ingredients_json, validation_score, validation_status, created_by, created_at
+        FROM formula_control
+        WHERE id = ? AND product_id = ?
+      `).bind(formulaId, productId).first<Record<string, unknown>>();
+
+      if (!formula) return json({ error: { code: 'NOT_FOUND', message: 'Formula not found' }, requestId: id }, 404);
+
+      return json({
+        data: {
+          ...formulaFromRow(formula),
+          formula_name: formula.formula_name,
+          ingredients_json: JSON.parse(String(formula.ingredients_json)),
+          created_at: formula.created_at
+        },
+        requestId: id
+      });
+    }
+
+    // ========== LIST FORMULAS BY PRODUCT ==========
+    if (request.method === 'GET' && url.pathname.match(/^\/products\/([a-f0-9-]+)\/formulas$/)) {
+      const productId = url.pathname.match(/^\/products\/([a-f0-9-]+)\/formulas$/)![1];
+      const product = await env.DB.prepare('SELECT id FROM products WHERE id = ?').bind(productId).first<{ id: string }>();
+      if (!product) return json({ error: { code: 'NOT_FOUND', message: 'Product not found' }, requestId: id }, 404);
+
+      const formulas = await env.DB.prepare(`
+        SELECT id, product_id, formula_code, formula_name, validation_score, validation_status, created_at
+        FROM formula_control
+        WHERE product_id = ?
+        ORDER BY created_at DESC
+      `).bind(productId).all<Record<string, unknown>>();
+
+      return json({
+        data: formulas.results.map(row => ({
+          ...formulaFromRow(row),
+          formula_name: row.formula_name,
+          created_at: row.created_at
+        })),
+        requestId: id
+      });
     }
 
     if (request.method === 'POST' && url.pathname === '/evidence') {
@@ -215,12 +408,12 @@ export default {
       if (!requireRole(actor, ['RA', 'QA', 'QC', 'DCC', 'R&D'])) return json({ error: { code: 'FORBIDDEN', message: 'Evidence upload role required' }, requestId: id }, 403);
       const input = await body<EvidenceInput>(request);
       if (!input?.recordType || !input.recordId || !input.title?.trim() || !input.revision?.trim() || !input.contentType?.trim()) return json({ error: { code: 'VALIDATION_ERROR', message: 'recordType, recordId, title, revision and contentType are required' }, requestId: id }, 400);
-      if (input.recordType !== 'PRODUCT' || !await env.DB.prepare('SELECT id FROM products WHERE id = ?').bind(input.recordId).first()) return json({ error: { code: 'VALIDATION_ERROR', message: 'Only PRODUCT evidence records are supported' }, requestId: id }, 400);
+      if (input.recordType !== 'PRODUCT' || !await env.DB.prepare('SELECT id FROM products WHERE id = ?').bind(input.recordId).first()) return json({ error: { code: 'VALIDATION_ERROR', message: 'recordId must reference a valid product' }, requestId: id }, 400);
       const evidenceId = crypto.randomUUID();
       const storageKey = `evidence/${input.recordType}/${input.recordId}/${evidenceId}`;
       await env.DB.batch([
         env.DB.prepare('INSERT INTO evidence (id, record_type, record_id, title, revision, storage_key, content_type, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(evidenceId, input.recordType, input.recordId, input.title.trim(), input.revision.trim(), storageKey, input.contentType.trim(), actor.id),
-        env.DB.prepare('INSERT INTO audit_events (id, actor_id, actor_role, action, module, record_type, record_id, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), actor.id, actorRole(actor), 'CREATE', 'REGULATORY_AFFAIRS', 'EVIDENCE', evidenceId, id),
+        env.DB.prepare('INSERT INTO audit_events (id, actor_id, actor_role, action, module, record_type, record_id, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), actor.id, actorRole(actor), 'UPLOAD_EVIDENCE', 'REGULATORY_AFFAIRS', 'EVIDENCE', evidenceId, id),
       ]);
       return json({ data: { id: evidenceId, uploadUrl: `/files/upload/${evidenceId}`, status: 'UPLOADED' }, requestId: id }, 201);
     }
@@ -259,11 +452,11 @@ export default {
       const product = await env.DB.prepare('SELECT id, revision, state FROM products WHERE id = ?').bind(productId).first<{ id: string; revision: string; state: string }>();
       if (!product) return json({ error: { code: 'NOT_FOUND', message: 'Product not found' }, requestId: id }, 404);
       if (product.state !== 'PENDING_APPROVAL') return json({ error: { code: 'INVALID_STATE', message: 'Product is not pending approval' }, requestId: id }, 409);
-      const step = await env.DB.prepare("SELECT id, required_role, status, sequence, revision FROM approval_steps WHERE record_type = 'PRODUCT' AND record_id = ? AND revision = ? AND status = 'PENDING' ORDER BY sequence LIMIT 1")
+      const step = await env.DB.prepare("SELECT id, required_role, status, sequence, revision FROM approval_steps WHERE record_type = 'PRODUCT' AND record_id = ? AND revision = ? AND status = 'PENDING'")
         .bind(productId, product.revision).first<{ id: string; required_role: string; status: string; sequence: number; revision: string }>();
       if (!step) return json({ error: { code: 'APPROVAL_STEP_REQUIRED', message: 'No pending approval step exists' }, requestId: id }, 409);
       if (!actor.roles.some((grant) => grant.role === step.required_role && grant.canApprove)) return json({ error: { code: 'APPROVER_NOT_AUTHORIZED', message: 'Actor cannot decide this approval step' }, requestId: id }, 403);
-      if (!await hasVerifiedEvidence(env, 'PRODUCT', product.id, product.revision)) return json({ error: { code: 'VERIFIED_EVIDENCE_REQUIRED', message: 'Verified evidence is required at approval time' }, requestId: id }, 409);
+      if (!await hasVerifiedEvidence(env, 'PRODUCT', product.id, product.revision)) return json({ error: { code: 'VERIFIED_EVIDENCE_REQUIRED', message: 'Verified evidence is required at approval stage' }, requestId: id }, 409);
       const input = await body<DecisionInput>(request);
       if ((action === 'reject' || action === 'return') && !input?.comment?.trim()) return json({ error: { code: 'VALIDATION_ERROR', message: 'A comment is required for reject or return' }, requestId: id }, 400);
       if (action === 'approve') {
@@ -271,9 +464,9 @@ export default {
           .bind(productId, product.revision).first<{ id: string }>();
         const nextState = next ? 'PENDING_APPROVAL' : 'APPROVED';
         const statements = [
-          env.DB.prepare("UPDATE approval_steps SET status = 'APPROVED', approver_id = ?, decided_at = CURRENT_TIMESTAMP, comment = ? WHERE id = ? AND status = 'PENDING'").bind(actor.id, input?.comment?.trim() ?? null, step.id),
+          env.DB.prepare("UPDATE approval_steps SET status = 'APPROVED', approver_id = ?, decided_at = CURRENT_TIMESTAMP, comment = ? WHERE id = ? AND status = 'PENDING'").bind(actor.id, input?.comment ?? null, step.id),
           env.DB.prepare('UPDATE products SET state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(nextState, productId),
-          env.DB.prepare('INSERT INTO audit_events (id, actor_id, actor_role, action, module, record_type, record_id, previous_state, new_state, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), actor.id, actorRole(actor), 'APPROVE', 'REGULATORY_AFFAIRS', 'PRODUCT', productId, product.state, nextState, id),
+          env.DB.prepare('INSERT INTO audit_events (id, actor_id, actor_role, action, module, record_type, record_id, previous_state, new_state, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), actor.id, actorRole(actor), 'APPROVE', 'REGULATORY_AFFAIRS', 'PRODUCT', productId, 'PENDING_APPROVAL', nextState, id),
         ];
         if (next) statements.splice(1, 0, env.DB.prepare("UPDATE approval_steps SET status = 'PENDING' WHERE id = ? AND status = 'WAITING'").bind(next.id));
         await env.DB.batch(statements);
@@ -282,9 +475,9 @@ export default {
 
       const terminalState = action === 'reject' ? 'REJECTED' : 'RETURNED';
       await env.DB.batch([
-        env.DB.prepare('UPDATE approval_steps SET status = ?, approver_id = ?, decided_at = CURRENT_TIMESTAMP, comment = ? WHERE id = ? AND status = ?').bind(terminalState, actor.id, input!.comment!.trim(), step.id, 'PENDING'),
+        env.DB.prepare('UPDATE approval_steps SET status = ?, approver_id = ?, decided_at = CURRENT_TIMESTAMP, comment = ? WHERE id = ? AND status = ?').bind(terminalState, actor.id, input!.comment || null, step.id, 'PENDING'),
         env.DB.prepare('UPDATE products SET state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(terminalState, productId),
-        env.DB.prepare('INSERT INTO audit_events (id, actor_id, actor_role, action, module, record_type, record_id, previous_state, new_state, reason, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), actor.id, actorRole(actor), action.toUpperCase(), 'REGULATORY_AFFAIRS', 'PRODUCT', productId, product.state, terminalState, input!.comment!.trim(), id),
+        env.DB.prepare('INSERT INTO audit_events (id, actor_id, actor_role, action, module, record_type, record_id, previous_state, new_state, reason, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), actor.id, actorRole(actor), action.toUpperCase(), 'REGULATORY_AFFAIRS', 'PRODUCT', productId, 'PENDING_APPROVAL', terminalState, input!.comment || null, id),
       ]);
       return json({ data: { productId, state: terminalState }, requestId: id });
     }
@@ -293,4 +486,3 @@ export default {
     return json({ error: { code: 'NOT_FOUND', message: 'Route not found' }, requestId: id }, 404);
   },
 } satisfies ExportedHandler<Env>;
-
