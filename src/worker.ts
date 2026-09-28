@@ -13,6 +13,7 @@ type DecisionInput = { comment?: string };
 type FormulaInput = { formula_code?: string; formula_name?: string; ingredients_json?: Array<{ ingredient_name?: string; percentage?: number }> };
 type FormulaValidationResult = { id: string; product_id: string; formula_code: string; validation_score: number; validation_status: string };
 type FormulaRow = { id: string; product_id: string; formula_code: string; formula_name: string; ingredients_json: string; validation_score: number; validation_status: string; created_at?: string; updated_at?: string };
+type Ingredient = { ingredient_name: string; percentage: number };
 
 const previewActor: Actor = { id: 'preview', email: 'preview@puisabpak.local', roles: [] };
 
@@ -116,21 +117,15 @@ function validateFormulaIngredients(ingredients: unknown): { isValid: boolean; s
   return { isValid, score, errors };
 }
 
-function parseIngredientsJson(jsonStr: unknown): Array<{ ingredient_name: string; percentage: number }> | null {
+function parseIngredientsJson(jsonStr: string): Ingredient[] | null {
   try {
-    const parsed = JSON.parse(String(jsonStr));
-    if (Array.isArray(parsed)) {
-      return parsed;
-    }
-    return null;
+    const parsed = JSON.parse(jsonStr);
+    if (!Array.isArray(parsed)) return null;
+    return parsed.every((item) => typeof item.ingredient_name === 'string' && typeof item.percentage === 'number') ? parsed : null;
   } catch {
     return null;
   }
 }
-
-const protectedRoute = (actor: Actor | null, id: string): Response | null => actor
-  ? null
-  : json({ error: { code: 'UNAUTHENTICATED', message: 'Authenticated user required for write actions' }, requestId: id }, 401);
 
 async function body<T>(request: Request): Promise<T | null> {
   try { return await request.json() as T; } catch { return null; }
@@ -273,7 +268,7 @@ export default {
       return json({ data: { productId: product.id, revision: product.revision, state: 'PENDING_APPROVAL' }, requestId: id });
     }
 
-    // ========== FORMULA VALIDATION API ==========
+    // ========== FORMULA VALIDATION API (POST) ==========
     const formulaValidateRoute = url.pathname.match(/^\/products\/([a-f0-9-]+)\/formulas\/validate$/);
     if (request.method === 'POST' && formulaValidateRoute) {
       if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
@@ -377,7 +372,7 @@ export default {
       if (!requireRole(actor, ['RA', 'R&D', 'QA'])) return json({ error: { code: 'FORBIDDEN', message: 'RA, R&D or QA role required' }, requestId: id }, 403);
 
       const [productId, formulaId] = [formulaUpdateRoute[1], formulaUpdateRoute[2]];
-      
+
       const product = await env.DB.prepare('SELECT id FROM products WHERE id = ?').bind(productId).first<{ id: string }>();
       if (!product) return json({ error: { code: 'NOT_FOUND', message: 'Product not found' }, requestId: id }, 404);
 
@@ -386,14 +381,14 @@ export default {
         FROM formula_control
         WHERE id = ? AND product_id = ?
       `).bind(formulaId, productId).first<FormulaRow>();
-      
+
       if (!existing) return json({ error: { code: 'NOT_FOUND', message: 'Formula not found' }, requestId: id }, 404);
 
       const input = await body<FormulaInput>(request);
       if (!input) return json({ error: { code: 'VALIDATION_ERROR', message: 'Request body is required' }, requestId: id }, 400);
 
       const formulaName = input.formula_name?.trim() || existing.formula_name;
-      let ingredientsArray = input.ingredients_json;
+      let ingredientsArray: Ingredient[] | null = input.ingredients_json || null;
 
       if (!ingredientsArray) {
         const parsed = parseIngredientsJson(existing.ingredients_json);
@@ -497,7 +492,7 @@ export default {
       });
     }
 
-    // ========== GET FORMULA DETAILS ==========
+    // ========== GET FORMULA DETAILS (GET) ==========
     if (request.method === 'GET' && formulaUpdateRoute) {
       const [productId, formulaId] = [formulaUpdateRoute[1], formulaUpdateRoute[2]];
       const formula = await env.DB.prepare(`
@@ -528,7 +523,7 @@ export default {
       });
     }
 
-    // ========== LIST FORMULAS BY PRODUCT ==========
+    // ========== LIST FORMULAS BY PRODUCT (GET) ==========
     if (request.method === 'GET' && url.pathname.match(/^\/products\/([a-f0-9-]+)\/formulas$/)) {
       const productId = url.pathname.match(/^\/products\/([a-f0-9-]+)\/formulas$/)![1];
       const product = await env.DB.prepare('SELECT id FROM products WHERE id = ?').bind(productId).first<{ id: string }>();
