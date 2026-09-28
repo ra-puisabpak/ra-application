@@ -414,6 +414,12 @@ export default {
     }
 
 
+    if (request.method === 'GET' && url.pathname.match(/^\/documents\/[^/]+\/obsolete-history$/)) {
+      const documentId = url.pathname.split('/')[2];
+      const rows = await env.DB.prepare('SELECT * FROM document_obsolete_events WHERE document_id = ? ORDER BY obsolete_at DESC').bind(documentId).all();
+      return json({ data: rows.results, requestId: id });
+    }
+
     if (request.method === 'GET' && url.pathname.match(/^\/documents\/[^/]+\/revisions$/)) {
       const documentId = url.pathname.split('/')[2];
       const rows = await env.DB.prepare('SELECT * FROM document_revisions WHERE document_id = ? ORDER BY created_at DESC').bind(documentId).all();
