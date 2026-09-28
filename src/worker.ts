@@ -10,6 +10,48 @@ type Product = { id: string; productCode: string; thaiName: string; englishName:
 type ProductInput = { productCode?: string; thaiName?: string; englishName?: string; siteId?: string; expectedVersion?: number };
 type EvidenceInput = { recordType?: string; recordId?: string; title?: string; revision?: string; contentType?: string };
 type DecisionInput = { comment?: string };
+type SessionData = { userId: string; email: string; roles: RoleGrant[] };
+
+async function hashPassword(password: string): Promise<string> {
+  const data = new TextEncoder().encode(password);
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function hashSessionToken(token: string): Promise<string> {
+  return hashPassword(token);
+}
+
+function getSessionToken(request: Request): string | null {
+  return request.headers.get('cookie')?.split(';').map((part) => part.trim())
+    .find((part) => part.startsWith('session='))?.slice('session='.length) || null;
+}
+
+async function actorFromSession(request: Request, env: Env): Promise<Actor | null> {
+  const token = getSessionToken(request);
+  if (!token) return null;
+  try {
+    const tokenHash = await hashSessionToken(token);
+    const session = await env.DB.prepare(
+      'SELECT user_id FROM auth_sessions WHERE token_hash = ? AND expires_at > CURRENT_TIMESTAMP'
+    ).bind(tokenHash).first<{ user_id: string }>();
+    if (!session) return null;
+    const user = await env.DB.prepare('SELECT id, email FROM users WHERE id = ? AND active = 1')
+      .bind(session.user_id).first<{ id: string; email: string }>();
+    if (!user) return null;
+    const roles = await env.DB.prepare('SELECT role, can_approve FROM user_roles WHERE user_id = ?')
+      .bind(user.id).all<{ role: string; can_approve: number }>();
+    return {
+      id: user.id,
+      email: user.email,
+      roles: roles.results.map((row) => ({ role: row.role, canApprove: row.can_approve === 1 })),
+    };
+  } catch (error) {
+    console.error('SESSION_LOOKUP_FAILED', error);
+    return null;
+  }
+}
+
 type Ingredient = { ingredient_name: string; percentage: number };
 type FormulaInput = { formula_code?: string; formula_name?: string; ingredients_json?: Ingredient[] };
 type FormulaRow = { id: string; product_id: string; formula_code: string; formula_name: string; ingredients_json: string; validation_score: number; validation_status: string; created_at?: string; updated_at?: string };
@@ -126,6 +168,55 @@ export default {
           return env.ASSETS.fetch(rootIndex);
         }
       }
+    }
+
+
+    if (request.method === 'POST' && url.pathname === '/auth/login') {
+      const input = await body<{ email?: string; password?: string }>(request);
+      if (!input?.email?.trim() || !input.password) {
+        return json({ error: { code: 'VALIDATION_ERROR', message: 'email and password are required' }, requestId: id }, 400);
+      }
+      try {
+        const user = await env.DB.prepare('SELECT id, email, password_hash FROM users WHERE email = ? AND active = 1')
+          .bind(input.email.toLowerCase().trim()).first<{ id: string; email: string; password_hash: string | null }>();
+        if (!user?.password_hash || (await hashPassword(input.password)) !== user.password_hash) {
+          return json({ error: { code: 'INVALID_CREDENTIALS', message: 'Invalid email or password' }, requestId: id }, 401);
+        }
+        const roles = await env.DB.prepare('SELECT role, can_approve FROM user_roles WHERE user_id = ?')
+          .bind(user.id).all<{ role: string; can_approve: number }>();
+        const token = crypto.randomUUID() + crypto.randomUUID();
+        const tokenHash = await hashSessionToken(token);
+        await env.DB.batch([
+          env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ?').bind(user.id),
+          env.DB.prepare("INSERT INTO auth_sessions (token_hash, user_id, expires_at) VALUES (?, ?, datetime('now', '+1 day'))").bind(tokenHash, user.id),
+          env.DB.prepare('UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?').bind(user.id),
+          env.DB.prepare('INSERT INTO audit_events (id, actor_id, actor_role, action, module, record_type, record_id, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+            .bind(crypto.randomUUID(), user.id, roles.results[0]?.role ?? 'PREVIEW', 'LOGIN', 'AUTH', 'USER', user.id, id),
+        ]);
+        const response = json({ success: true, data: {
+          userId: user.id, email: user.email,
+          roles: roles.results.map((r) => ({ role: r.role, canApprove: r.can_approve === 1 })),
+        }, requestId: id });
+        response.headers.set('Set-Cookie', `session=${token}; HttpOnly; Path=/; Max-Age=86400; SameSite=Lax${url.protocol === 'https:' ? '; Secure' : ''}`);
+        return response;
+      } catch (error) {
+        console.error('LOGIN_FAILED', error);
+        return json({ error: { code: 'INTERNAL_ERROR', message: 'Login failed' }, requestId: id }, 500);
+      }
+    }
+
+    if (request.method === 'POST' && url.pathname === '/auth/logout') {
+      const actor = await authenticatedActor(request, env);
+      if (actor) {
+        await env.DB.batch([
+          env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ?').bind(actor.id),
+          env.DB.prepare('INSERT INTO audit_events (id, actor_id, actor_role, action, module, record_type, record_id, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+            .bind(crypto.randomUUID(), actor.id, actorRole(actor), 'LOGOUT', 'AUTH', 'USER', actor.id, id),
+        ]);
+      }
+      const response = json({ success: true, message: 'Logged out successfully', requestId: id });
+      response.headers.set('Set-Cookie', 'session=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax');
+      return response;
     }
 
     const actor = await authenticatedActor(request, env);
