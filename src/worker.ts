@@ -573,6 +573,19 @@ export default {
       return json({ data: rows.results, requestId: id });
     }
 
+    if (request.method === 'GET' && url.pathname === '/ra/label-guidance') {
+      const rows = await env.DB.prepare('SELECT * FROM ra_label_guidance ORDER BY topic').all();
+      return json({ data: rows.results, requestId: id });
+    }
+    if (request.method === 'GET' && url.pathname === '/ra/label-checklist') {
+      const rows = await env.DB.prepare('SELECT * FROM ra_label_release_checklist ORDER BY check_id').all();
+      return json({ data: rows.results, requestId: id });
+    }
+    if (request.method === 'GET' && url.pathname === '/ra/allergen-matrix') {
+      const rows = await env.DB.prepare('SELECT * FROM ra_raw_material_allergen_matrix ORDER BY sku').all();
+      return json({ data: rows.results, requestId: id });
+    }
+
     if (request.method === 'GET' && url.pathname === '/documents') {
       const type = url.searchParams.get('type');
       const department = url.searchParams.get('department');
