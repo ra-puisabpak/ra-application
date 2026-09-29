@@ -634,6 +634,115 @@ export default {
       const lid=crypto.randomUUID(); await env.DB.prepare('INSERT INTO supplier_raw_material_links(id,supplier_id,material_code) VALUES(?,?,?)').bind(lid,supplierId,input.material_code).run(); return json({data:{id:lid,status:'DRAFT'},requestId:id},201);
     }
 
+    if (url.pathname === '/qa/nonconformities' && request.method === 'GET') {
+      const status = url.searchParams.get('status');
+      const result = status
+        ? await env.DB.prepare('SELECT * FROM nonconformities WHERE status = ? ORDER BY created_at DESC').bind(status).all()
+        : await env.DB.prepare('SELECT * FROM nonconformities ORDER BY created_at DESC').all();
+      return json({ data: result.results });
+    }
+
+    if (url.pathname === '/qa/nonconformities' && request.method === 'POST') {
+      const actor = await authenticatedActor(request, env); const auth = protectedRoute(actor, id); if (auth) return auth;
+      const input = await body<Record<string, unknown>>(request);
+      const required = ['source','title','description','severity','owner_id','due_date'];
+      if (!input || required.some((k) => typeof input[k] !== 'string' || !String(input[k]).trim())) return json({ error: { code: 'VALIDATION_ERROR', message: 'source, title, description, severity, owner_id and due_date are required' }, requestId: id }, 400);
+      const severity = String(input.severity).toUpperCase();
+      const sources = ['INTERNAL_AUDIT','REGULATORY_AUDIT','FDA_QUERY','CUSTOMER_COMPLAINT','SUPPLIER','DATA_INTEGRITY','LABEL_REVIEW','PROCESS','PRODUCT','OTHER'];
+      if (!sources.includes(String(input.source).toUpperCase()) || !['LOW','MEDIUM','HIGH','CRITICAL'].includes(severity)) return json({ error: { code: 'VALIDATION_ERROR', message: 'Unsupported source or severity' }, requestId: id }, 400);
+      const ncId = crypto.randomUUID();
+      await env.DB.prepare('INSERT INTO nonconformities (id, source, source_record_id, title, description, severity, owner_id, due_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(ncId, String(input.source).toUpperCase(), input.source_record_id ? String(input.source_record_id) : null, String(input.title).trim(), String(input.description).trim(), severity, String(input.owner_id).trim(), String(input.due_date)).run();
+      await audit(env, actor!, id, 'CREATE_NONCONFORMITY', 'NONCONFORMITY', ncId, undefined, 'OPEN');
+      return json({ data: { id: ncId, status: 'OPEN' } }, 201);
+    }
+
+    const ncStatusMatch = url.pathname.match(/^\\/qa\\/nonconformities\\/([^/]+)\\/status$/);
+    if (ncStatusMatch && request.method === 'POST') {
+      const actor = await authenticatedActor(request, env); const auth = protectedRoute(actor, id); if (auth) return auth;
+      const input = await body<{ status?: string }>(request); const status = input?.status?.toUpperCase();
+      if (!['OPEN','UNDER_REVIEW','CONVERTED_TO_CAPA','CLOSED'].includes(status || '')) return json({ error: { code: 'VALIDATION_ERROR', message: 'Unsupported NC status' }, requestId: id }, 400);
+      const current = await env.DB.prepare('SELECT status FROM nonconformities WHERE id = ?').bind(ncStatusMatch[1]).first<{ status: string }>();
+      if (!current) return json({ error: { code: 'NOT_FOUND', message: 'Nonconformity not found' }, requestId: id }, 404);
+      await env.DB.prepare('UPDATE nonconformities SET status = ? WHERE id = ?').bind(status, ncStatusMatch[1]).run();
+      await audit(env, actor!, id, 'UPDATE_NONCONFORMITY_STATUS', 'NONCONFORMITY', ncStatusMatch[1], current.status, status);
+      return json({ data: { id: ncStatusMatch[1], status } });
+    }
+
+    if (url.pathname === '/qa/capas' && request.method === 'GET') {
+      const rows = await env.DB.prepare('SELECT c.*, n.title AS nonconformity_title, n.severity AS nonconformity_severity FROM capas c JOIN nonconformities n ON n.id = c.nonconformity_id ORDER BY c.created_at DESC').all();
+      return json({ data: rows.results });
+    }
+
+    if (url.pathname === '/qa/capas' && request.method === 'POST') {
+      const actor = await authenticatedActor(request, env); const auth = protectedRoute(actor, id); if (auth) return auth;
+      const input = await body<{ nonconformity_id?: string; owner_id?: string }>(request);
+      if (!input?.nonconformity_id || !input.owner_id) return json({ error: { code: 'VALIDATION_ERROR', message: 'nonconformity_id and owner_id are required' }, requestId: id }, 400);
+      const nc = await env.DB.prepare('SELECT id, status FROM nonconformities WHERE id = ?').bind(input.nonconformity_id).first<{ id: string; status: string }>();
+      if (!nc) return json({ error: { code: 'NOT_FOUND', message: 'Nonconformity not found' }, requestId: id }, 404);
+      const capaId = crypto.randomUUID();
+      await env.DB.prepare('INSERT INTO capas (id, nonconformity_id, owner_id) VALUES (?, ?, ?)').bind(capaId, input.nonconformity_id, input.owner_id).run();
+      await env.DB.prepare("UPDATE nonconformities SET status = 'CONVERTED_TO_CAPA' WHERE id = ?").bind(input.nonconformity_id).run();
+      await audit(env, actor!, id, 'CREATE_CAPA', 'CAPA', capaId, 'OPEN', 'OPEN');
+      return json({ data: { id: capaId, status: 'OPEN' } }, 201);
+    }
+
+    const capaMatch = url.pathname.match(/^\\/qa\\/capas\\/([^/]+)$/);
+    if (capaMatch && request.method === 'GET') {
+      const capa = await env.DB.prepare('SELECT * FROM capas WHERE id = ?').bind(capaMatch[1]).first();
+      if (!capa) return json({ error: { code: 'NOT_FOUND', message: 'CAPA not found' }, requestId: id }, 404);
+      const actions = await env.DB.prepare('SELECT * FROM capa_actions WHERE capa_id = ? ORDER BY created_at').bind(capaMatch[1]).all();
+      return json({ data: { ...capa, actions: actions.results } });
+    }
+
+    const capaActionMatch = url.pathname.match(/^\\/qa\\/capas\\/([^/]+)\\/actions$/);
+    if (capaActionMatch && request.method === 'POST') {
+      const actor = await authenticatedActor(request, env); const auth = protectedRoute(actor, id); if (auth) return auth;
+      const input = await body<Record<string, unknown>>(request);
+      const required = ['type','description','owner_id','due_date'];
+      if (!input || required.some((k) => typeof input[k] !== 'string' || !String(input[k]).trim())) return json({ error: { code: 'VALIDATION_ERROR', message: 'type, description, owner_id and due_date are required' }, requestId: id }, 400);
+      if (!['CORRECTION','CORRECTIVE_ACTION','PREVENTIVE_ACTION'].includes(String(input.type).toUpperCase())) return json({ error: { code: 'VALIDATION_ERROR', message: 'Unsupported action type' }, requestId: id }, 400);
+      const capa = await env.DB.prepare('SELECT id FROM capas WHERE id = ?').bind(capaActionMatch[1]).first();
+      if (!capa) return json({ error: { code: 'NOT_FOUND', message: 'CAPA not found' }, requestId: id }, 404);
+      const actionId = crypto.randomUUID();
+      await env.DB.prepare('INSERT INTO capa_actions (id, capa_id, type, description, owner_id, due_date) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind(actionId, capaActionMatch[1], String(input.type).toUpperCase(), String(input.description).trim(), String(input.owner_id).trim(), String(input.due_date)).run();
+      return json({ data: { id: actionId, status: 'OPEN' } }, 201);
+    }
+
+    const capaUpdateMatch = url.pathname.match(/^\\/qa\\/capas\\/([^/]+)\\/update$/);
+    if (capaUpdateMatch && request.method === 'POST') {
+      const actor = await authenticatedActor(request, env); const auth = protectedRoute(actor, id); if (auth) return auth;
+      const input = await body<Record<string, unknown>>(request);
+      const current = await env.DB.prepare('SELECT * FROM capas WHERE id = ?').bind(capaUpdateMatch[1]).first<Record<string, unknown>>();
+      if (!current) return json({ error: { code: 'NOT_FOUND', message: 'CAPA not found' }, requestId: id }, 404);
+      const allowed = ['OPEN','ROOT_CAUSE_ANALYSIS','ACTION_PLANNING','IMPLEMENTATION','EFFECTIVENESS_CHECK','REJECTED'];
+      const nextStatus = input?.status ? String(input.status).toUpperCase() : String(current.status);
+      if (!allowed.includes(nextStatus)) return json({ error: { code: 'VALIDATION_ERROR', message: 'Unsupported CAPA status' }, requestId: id }, 400);
+      const rootCause = input?.root_cause !== undefined ? String(input.root_cause) : (current.root_cause as string | null);
+      const criteria = input?.effectiveness_criteria !== undefined ? String(input.effectiveness_criteria) : (current.effectiveness_criteria as string | null);
+      const verifiedBy = input?.verified_by !== undefined ? String(input.verified_by) : (current.verified_by as string | null);
+      const verifiedAt = input?.verified_at !== undefined ? String(input.verified_at) : (current.verified_at as string | null);
+      if (nextStatus === 'EFFECTIVENESS_CHECK' && (!rootCause || !criteria)) return json({ error: { code: 'CLOSURE_GATE', message: 'Root cause and effectiveness criteria are required before effectiveness check' }, requestId: id }, 400);
+      if (nextStatus === 'CLOSED') return json({ error: { code: 'CLOSURE_GATE', message: 'Use effectiveness check and verified closure data before closing CAPA' }, requestId: id }, 400);
+      await env.DB.prepare('UPDATE capas SET status = ?, root_cause_method = ?, root_cause = ?, containment = ?, effectiveness_criteria = ?, verified_by = ?, verified_at = ? WHERE id = ?')
+        .bind(nextStatus, input?.root_cause_method ? String(input.root_cause_method) : (current.root_cause_method as string | null), input?.root_cause !== undefined ? rootCause : (current.root_cause as string | null), input?.containment !== undefined ? String(input.containment) : (current.containment as string | null), criteria, verifiedBy, verifiedAt, capaUpdateMatch[1]).run();
+      await audit(env, actor!, id, 'UPDATE_CAPA', 'CAPA', capaUpdateMatch[1], String(current.status), nextStatus);
+      return json({ data: { id: capaUpdateMatch[1], status: nextStatus } });
+    }
+
+    const capaCloseMatch = url.pathname.match(/^\\/qa\\/capas\\/([^/]+)\\/close$/);
+    if (capaCloseMatch && request.method === 'POST') {
+      const actor = await authenticatedActor(request, env); const auth = protectedRoute(actor, id); if (auth) return auth;
+      const current = await env.DB.prepare('SELECT * FROM capas WHERE id = ?').bind(capaCloseMatch[1]).first<{ status:string; root_cause:string|null; effectiveness_criteria:string|null; verified_by:string|null; verified_at:string|null }>();
+      if (!current) return json({ error: { code: 'NOT_FOUND', message: 'CAPA not found' }, requestId: id }, 404);
+      const incomplete = await env.DB.prepare("SELECT COUNT(*) AS count FROM capa_actions WHERE capa_id = ? AND status != 'COMPLETED'").bind(capaCloseMatch[1]).first<{count:number}>();
+      if (current.status !== 'EFFECTIVENESS_CHECK' || !current.root_cause || !current.effectiveness_criteria || !current.verified_by || !current.verified_at || (incomplete?.count ?? 0) > 0) return json({ error: { code: 'CLOSURE_GATE', message: 'CAPA closure requires root cause, effectiveness criteria, verification, and all actions completed' }, requestId: id }, 400);
+      await env.DB.prepare("UPDATE capas SET status = 'CLOSED', closed_at = CURRENT_TIMESTAMP WHERE id = ?").bind(capaCloseMatch[1]).run();
+      await audit(env, actor!, id, 'CLOSE_CAPA', 'CAPA', capaCloseMatch[1], 'EFFECTIVENESS_CHECK', 'CLOSED');
+      return json({ data: { id: capaCloseMatch[1], status: 'CLOSED' } });
+    }
+
     if (request.method === 'GET' && url.pathname === '/documents') {
       const type = url.searchParams.get('type');
       const department = url.searchParams.get('department');
