@@ -586,6 +586,54 @@ export default {
       return json({ data: rows.results, requestId: id });
     }
 
+    if (request.method === 'GET' && url.pathname === '/ra/suppliers') {
+      const rows = await env.DB.prepare('SELECT * FROM supplier_master ORDER BY supplier_code').all();
+      return json({ data: rows.results, requestId: id });
+    }
+    if (request.method === 'POST' && url.pathname === '/ra/suppliers') {
+      if (!actor) return json({ error: { code:'UNAUTHENTICATED', message:'Login required' }, requestId:id },401);
+      if (!requireRole(actor,['RA','QA','QC','DCC'])) return json({ error:{code:'FORBIDDEN',message:'RA/QA/QC/DCC role required'},requestId:id},403);
+      const input=await body<{supplier_code?:string;supplier_name?:string;notes?:string}>(request);
+      if(!input?.supplier_code?.trim()||!input?.supplier_name?.trim()) return json({error:{code:'VALIDATION_ERROR',message:'supplier_code and supplier_name are required'},requestId:id},400);
+      const sid=crypto.randomUUID();
+      await env.DB.prepare('INSERT INTO supplier_master(supplier_id,supplier_code,supplier_name,owner_id,notes) VALUES(?,?,?,?,?)').bind(sid,input.supplier_code.trim(),input.supplier_name.trim(),actor.id,input.notes?.trim()||null).run();
+      return json({data:{supplier_id:sid,status:'DRAFT'},requestId:id},201);
+    }
+    const supplierReview=url.pathname.match(/^\/ra\/suppliers\/([^/]+)\/(submit|approve|reject|suspend)$/);
+    if(request.method==='POST'&&supplierReview){
+      if(!actor)return json({error:{code:'UNAUTHENTICATED',message:'Login required'},requestId:id},401);
+      const supplierId=supplierReview[1],action=supplierReview[2];
+      const input=await body<{comment?:string}>(request);
+      const supplier=await env.DB.prepare('SELECT * FROM supplier_master WHERE supplier_id=?').bind(supplierId).first<any>();
+      if(!supplier)return json({error:{code:'NOT_FOUND',message:'Supplier not found'},requestId:id},404);
+      if(action==='submit'){
+        if(!requireRole(actor,['RA','QA','QC','DCC']))return json({error:{code:'FORBIDDEN',message:'RA/QA/QC/DCC role required'},requestId:id},403);
+        if(supplier.status!=='DRAFT'&&supplier.status!=='REJECTED')return json({error:{code:'INVALID_STATE',message:'Supplier must be DRAFT or REJECTED'},requestId:id},409);
+        await env.DB.batch([env.DB.prepare("UPDATE supplier_master SET status='PENDING_REVIEW',updated_at=CURRENT_TIMESTAMP WHERE supplier_id=?").bind(supplierId),env.DB.prepare("INSERT INTO supplier_review_events(id,supplier_id,action,previous_status,new_status,actor_id,comment) VALUES(?,?,?,?,?,?,?)").bind(crypto.randomUUID(),supplierId,'SUBMIT',supplier.status,'PENDING_REVIEW',actor.id,input?.comment||null)]);
+      } else {
+        if(!requireRole(actor,['RA','QA','QC']))return json({error:{code:'FORBIDDEN',message:'RA/QA/QC role required'},requestId:id},403);
+        if(supplier.status!=='PENDING_REVIEW')return json({error:{code:'INVALID_STATE',message:'Supplier must be PENDING_REVIEW'},requestId:id},409);
+        const next=action==='approve'?'APPROVED':action==='reject'?'REJECTED':'SUSPENDED';
+        if((action==='reject'||action==='suspend')&&!input?.comment?.trim())return json({error:{code:'VALIDATION_ERROR',message:'comment is required'},requestId:id},400);
+        await env.DB.batch([env.DB.prepare('UPDATE supplier_master SET status=?,updated_at=CURRENT_TIMESTAMP WHERE supplier_id=?').bind(next,supplierId),env.DB.prepare("INSERT INTO supplier_review_events(id,supplier_id,action,previous_status,new_status,actor_id,comment) VALUES(?,?,?,?,?,?,?)").bind(crypto.randomUUID(),supplierId,action.toUpperCase(),supplier.status,next,actor.id,input?.comment||null)]);
+      }
+      return json({data:{supplier_id:supplierId,status:action==='submit'?'PENDING_REVIEW':action==='approve'?'APPROVED':action==='reject'?'REJECTED':'SUSPENDED'},requestId:id});
+    }
+    if(request.method==='GET'&&url.pathname.match(/^\/ra\/suppliers\/[^/]+\/events$/)){
+      const supplierId=url.pathname.split('/')[3]; const rows=await env.DB.prepare('SELECT * FROM supplier_review_events WHERE supplier_id=? ORDER BY created_at DESC').bind(supplierId).all(); return json({data:rows.results,requestId:id});
+    }
+    if(request.method==='GET'&&url.pathname.match(/^\/ra\/suppliers\/[^/]+\/materials$/)){
+      const supplierId=url.pathname.split('/')[3]; const rows=await env.DB.prepare('SELECT l.*,r.material_name_th,r.material_name_en FROM supplier_raw_material_links l JOIN ra_raw_material_master r ON r.material_code=l.material_code WHERE l.supplier_id=? ORDER BY r.material_code').bind(supplierId).all(); return json({data:rows.results,requestId:id});
+    }
+    if(request.method==='POST'&&url.pathname.match(/^\/ra\/suppliers\/[^/]+\/materials$/)){
+      if(!actor)return json({error:{code:'UNAUTHENTICATED',message:'Login required'},requestId:id},401);
+      if(!requireRole(actor,['RA','QA','QC','DCC']))return json({error:{code:'FORBIDDEN',message:'RA/QA/QC/DCC role required'},requestId:id},403);
+      const supplierId=url.pathname.split('/')[3]; const input=await body<{material_code?:string}>(request);
+      if(!input?.material_code)return json({error:{code:'VALIDATION_ERROR',message:'material_code is required'},requestId:id},400);
+      const exists=await env.DB.prepare('SELECT 1 FROM ra_raw_material_master WHERE material_code=?').bind(input.material_code).first(); if(!exists)return json({error:{code:'NOT_FOUND',message:'Raw material not found'},requestId:id},404);
+      const lid=crypto.randomUUID(); await env.DB.prepare('INSERT INTO supplier_raw_material_links(id,supplier_id,material_code) VALUES(?,?,?)').bind(lid,supplierId,input.material_code).run(); return json({data:{id:lid,status:'DRAFT'},requestId:id},201);
+    }
+
     if (request.method === 'GET' && url.pathname === '/documents') {
       const type = url.searchParams.get('type');
       const department = url.searchParams.get('department');
