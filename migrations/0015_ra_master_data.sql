@@ -64,3 +64,41 @@ INSERT OR REPLACE INTO ra_raw_material_master(material_code,material_name_th,mat
 CREATE INDEX IF NOT EXISTS ra_label_issue_status_idx ON ra_label_issue_list(status);
 CREATE INDEX IF NOT EXISTS ra_raw_material_allergen_idx ON ra_raw_material_master(allergen_group);
 CREATE INDEX IF NOT EXISTS ra_raw_material_sku_idx ON ra_raw_material_master(used_in_sku);
+CREATE TABLE IF NOT EXISTS ra_label_guidance (topic TEXT PRIMARY KEY, recommended_text TEXT NOT NULL, usage_condition TEXT);
+INSERT OR REPLACE INTO ra_label_guidance VALUES
+('แช่เย็น 0–4°C','การเก็บรักษา : เก็บรักษาในตู้เย็นที่อุณหภูมิ 0–4°C','ใช้เมื่อ Product Specification/Shelf-life Validation รองรับช่วงนี้'),
+('หลังเปิด 0–4°C','หลังเปิดใช้ ควรเก็บรักษาในตู้เย็นที่อุณหภูมิ 0–4°C และควรบริโภคให้หมดภายใน 1 เดือน','ใช้เมื่อ Validation รองรับทั้งอุณหภูมิและระยะเวลา'),
+('Allergen เป็นส่วนประกอบ','ข้อมูลสำหรับผู้แพ้อาหาร : มี...','ใช้กับ allergen ที่เป็นส่วนประกอบจริง'),
+('Allergen จาก Cross-contact','ข้อมูลสำหรับผู้แพ้อาหาร : อาจมี...','ใช้เมื่อเป็นความเสี่ยงจากกระบวนการและมี Allergen Risk Assessment รองรับ'),
+('Claim เชิงรสชาติ','หอมถั่วและงา กรุบกรอบ รสเผ็ดกำลังดี','ตัวอย่างข้อความเชิง sensory เพื่อลดความเสี่ยงจาก health/nutrition claim'),
+('สูตรเจ/Vegetarian','สูตรเจ / VEGETARIAN FOOD','ต้องตรวจ BOM, Supplier Spec และระบบควบคุม Cross-contact ก่อนใช้');
+CREATE TABLE IF NOT EXISTS ra_label_release_checklist (check_id INTEGER PRIMARY KEY AUTOINCREMENT, check_item TEXT NOT NULL, criterion TEXT NOT NULL);
+INSERT OR REPLACE INTO ra_label_release_checklist(check_id,check_item,criterion) VALUES
+(1,'ชื่ออาหาร TH/EN','ตรงกับ Master Product Information'),
+(2,'เลขสารบบอาหาร','ตรงกับเอกสาร อย./ผลิตภัณฑ์'),
+(3,'ผู้ผลิต/ที่อยู่','ตรงกับใบอนุญาต'),
+(4,'Net Weight','ตรงกับ Registration/Specification'),
+(5,'Ingredient %','เรียงมาก→น้อย และรวม 100%'),
+(6,'Compound Ingredient','ตรวจ Supplier Specification แล้ว'),
+(7,'Allergen','ครบและแยก ''มี''/''อาจมี'' ถูกต้อง'),
+(8,'Nutrition','ตรวจความจำเป็นและ Claim แล้ว'),
+(9,'Claim','มีหลักฐานรองรับและไม่ทำให้เข้าใจผิด'),
+(10,'Storage','ตรงกับ Validation'),
+(11,'Shelf-life','ตรงกับ Study/Specification'),
+(12,'Date Marking','รูปแบบถูกต้องและอ่านชัด'),
+(13,'Font Size','ตรวจจาก Artwork ขนาดจริง'),
+(14,'Barcode/QR','สแกนและตรวจสอบแล้ว'),
+(15,'Final Artwork','ตรงกับ Master Copy');
+CREATE TABLE IF NOT EXISTS ra_raw_material_allergen_matrix (sku TEXT PRIMARY KEY, product_name TEXT NOT NULL, fish TEXT, crustacean TEXT, soy_gluten TEXT, sesame TEXT, note TEXT);
+INSERT OR REPLACE INTO ra_raw_material_allergen_matrix VALUES
+('MC','น้ำพริกเผ็ดแมคเคอเรล','X','','','','ปลาแมคเคอเรลเป็นวัตถุดิบหลัก 66%'),
+('TD','น้ำพริกตาแดงมันกุ้ง','X','X','','','มีปลา(น้ำปลา) + สัตว์น้ำมีเปลือกแข็ง(มันกุ้ง+กุ้งแห้ง) รวม 2 แหล่งสัตว์น้ำมีเปลือกแข็ง'),
+('PY','น้ำพริกปลาย่างพลัส','X','','','','ปลา 2 แหล่ง (ปลาฉลาดรมควัน+น้ำปลา) — ชนิดปลายังไม่ยืนยัน'),
+('PR','น้ำพริกปลาร้าพริกสด','X','','','','ปลา 2 แหล่ง (ปลาร้า+น้ำปลา)'),
+('HH','น้ำพริกเห็ดหอมมังสวิรัติ','','','X','','⚠️ เปลี่ยนจากเดิม — เพิ่มซีอิ้วขาวเห็ดหอม ทำให้ไม่ใช่ SKU ปลอดสารก่อภูมิแพ้อีกต่อไป ต้องตรวจสอบข้าวสาลี/กลูเตนเพิ่ม'),
+('NPW','น้ำปลาหวานแซ่บ','X','X','','','มีทั้งน้ำปลาแท้และกุ้งแห้ง'),
+('SO','พริกผัดน้ำมันงา — PSP89','','','','X','น้ำมันงา+งาขาวคั่ว 2 แหล่ง — สารก่อภูมิแพ้งาทั้งสูตร'),
+('OO-O','พริกผัดน้ำมันมะกอก (ออริจินอล) — PSP17','','','','','⭐ ไม่มีสารก่อภูมิแพ้หลักที่ระบุ'),
+('OO-S','พริกผัดน้ำมันมะกอก (เผ็ด) — PSP05','','','','','⭐ ไม่มีสารก่อภูมิแพ้หลักที่ระบุ'),
+('CP','พริกคั่วป่น (วัตถุดิบกึ่งสำเร็จรูป)','','','','','⭐ พริกป่นล้วน 100% ไม่มีสารก่อภูมิแพ้');
+CREATE INDEX IF NOT EXISTS ra_allergen_sku_idx ON ra_raw_material_allergen_matrix(sku);
