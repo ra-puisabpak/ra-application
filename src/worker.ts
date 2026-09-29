@@ -494,6 +494,45 @@ export default {
     }
     if(request.method==='GET'&&url.pathname.match(/^\/approvals\/DOCUMENT\/[^/]+\/[^/]+$/)){const p=url.pathname.split('/');const rows=await env.DB.prepare('SELECT * FROM document_approval_steps WHERE document_id=? AND revision=? ORDER BY sequence').bind(p[2],p[3]).all();return json({data:rows.results,requestId:id});}
 
+    const docSupersede = url.pathname.match(/^\/documents\/([^/]+)\/supersede$/);
+    if (request.method === 'POST' && docSupersede) {
+      if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
+      if (!requireRole(actor, ['DCC', 'RA'])) return json({ error: { code: 'FORBIDDEN', message: 'DCC or RA role required' }, requestId: id }, 403);
+      const documentId = docSupersede[1];
+      const input = await body<{ superseded_by?: string; reason?: string }>(request);
+      if (!input?.superseded_by?.trim() || !input.reason?.trim()) return json({ error: { code: 'VALIDATION_ERROR', message: 'superseded_by and reason are required' }, requestId: id }, 400);
+      if (input.superseded_by === documentId) return json({ error: { code: 'VALIDATION_ERROR', message: 'A document cannot supersede itself' }, requestId: id }, 400);
+      const oldDoc = await env.DB.prepare("SELECT id, status, revision FROM documents WHERE id = ?").bind(documentId).first<{id:string;status:string;revision:string}>();
+      const newDoc = await env.DB.prepare("SELECT id, status, revision FROM documents WHERE id = ?").bind(input.superseded_by.trim()).first<{id:string;status:string;revision:string}>();
+      if (!oldDoc || !newDoc) return json({ error: { code: 'NOT_FOUND', message: 'Document not found' }, requestId: id }, 404);
+      if (oldDoc.status === 'OBSOLETE') return json({ error: { code: 'INVALID_STATE', message: 'Document is already obsolete' }, requestId: id }, 409);
+      if (newDoc.status !== 'CONTROLLED') return json({ error: { code: 'INVALID_STATE', message: 'Superseding document must be CONTROLLED' }, requestId: id }, 409);
+      await env.DB.batch([
+        env.DB.prepare("UPDATE documents SET status='OBSOLETE', superseded_by=?, updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(newDoc.id, oldDoc.id),
+        env.DB.prepare("INSERT INTO document_obsolete_events (id,document_id,reason,obsolete_by) VALUES (?,?,?,?)").bind(crypto.randomUUID(),oldDoc.id,input.reason.trim(),actor.id),
+        env.DB.prepare("INSERT INTO audit_events (id,actor_id,actor_role,action,module,record_type,record_id,previous_state,new_state,reason,request_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)").bind(crypto.randomUUID(),actor.id,actorRole(actor),'SUPERSEDE','DOCUMENT_CONTROL','DOCUMENT',oldDoc.id,oldDoc.status,'OBSOLETE',input.reason.trim(),id)
+      ]);
+      return json({ data: { documentId: oldDoc.id, status: 'OBSOLETE', supersededBy: newDoc.id }, requestId: id });
+    }
+
+    const docObsolete = url.pathname.match(/^\/documents\/([^/]+)\/obsolete$/);
+    if (request.method === 'POST' && docObsolete) {
+      if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
+      if (!requireRole(actor, ['DCC', 'RA'])) return json({ error: { code: 'FORBIDDEN', message: 'DCC or RA role required' }, requestId: id }, 403);
+      const documentId = docObsolete[1];
+      const input = await body<{ reason?: string }>(request);
+      if (!input?.reason?.trim()) return json({ error: { code: 'VALIDATION_ERROR', message: 'reason is required' }, requestId: id }, 400);
+      const doc = await env.DB.prepare("SELECT id,status FROM documents WHERE id=?").bind(documentId).first<{id:string;status:string}>();
+      if (!doc) return json({ error: { code: 'NOT_FOUND', message: 'Document not found' }, requestId: id }, 404);
+      if (doc.status === 'OBSOLETE') return json({ error: { code: 'INVALID_STATE', message: 'Document is already obsolete' }, requestId: id }, 409);
+      await env.DB.batch([
+        env.DB.prepare("UPDATE documents SET status='OBSOLETE', updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(documentId),
+        env.DB.prepare("INSERT INTO document_obsolete_events (id,document_id,reason,obsolete_by) VALUES (?,?,?,?)").bind(crypto.randomUUID(),documentId,input.reason.trim(),actor.id),
+        env.DB.prepare("INSERT INTO audit_events (id,actor_id,actor_role,action,module,record_type,record_id,previous_state,new_state,reason,request_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)").bind(crypto.randomUUID(),actor.id,actorRole(actor),'OBSOLETE','DOCUMENT_CONTROL','DOCUMENT',documentId,doc.status,'OBSOLETE',input.reason.trim(),id)
+      ]);
+      return json({ data: { documentId, status: 'OBSOLETE' }, requestId: id });
+    }
+
     if (request.method === 'GET' && url.pathname.match(/^\/documents\/[^/]+\/obsolete-history$/)) {
       const documentId = url.pathname.split('/')[2];
       const rows = await env.DB.prepare('SELECT * FROM document_obsolete_events WHERE document_id = ? ORDER BY obsolete_at DESC').bind(documentId).all();
