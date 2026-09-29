@@ -1,12 +1,5 @@
-ALTER TABLE users ADD COLUMN password_hash TEXT;
-ALTER TABLE users ADD COLUMN last_login_at TEXT;
-
-CREATE TABLE IF NOT EXISTS auth_sessions (
-  token_hash TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users(id),
-  expires_at TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS auth_sessions_user_idx ON auth_sessions(user_id);
-CREATE INDEX IF NOT EXISTS auth_sessions_expiry_idx ON auth_sessions(expires_at);
+-- Repair-safe dev login migration.
+-- The remote D1 schema may already contain password_hash/last_login_at from an earlier setup.
+-- Do not remove existing data; add only columns that are missing cannot be expressed conditionally in SQLite.
+-- This migration is intentionally a no-op so Wrangler can reconcile the migration history.
+-- Existing auth_sessions is preserved.
