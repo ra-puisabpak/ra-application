@@ -550,6 +550,42 @@ export default {
       return json({ data: rows.results, requestId: id });
     }
 
+    if (request.method === 'GET' && url.pathname === '/ra/label-approval') {
+      const rows = await env.DB.prepare('SELECT * FROM ra_label_approval_matrix ORDER BY sku').all();
+      return json({ data: rows.results, requestId: id });
+    }
+    if (request.method === 'GET' && url.pathname === '/ra/label-issues') {
+      const status = url.searchParams.get('status');
+      const rows = status
+        ? await env.DB.prepare('SELECT * FROM ra_label_issue_list WHERE status = ? ORDER BY issue_id').bind(status).all()
+        : await env.DB.prepare('SELECT * FROM ra_label_issue_list ORDER BY issue_id').all();
+      return json({ data: rows.results, requestId: id });
+    }
+    if (request.method === 'GET' && url.pathname === '/ra/sku-compliance') {
+      const rows = await env.DB.prepare('SELECT * FROM ra_sku_compliance_matrix ORDER BY sku').all();
+      return json({ data: rows.results, requestId: id });
+    }
+    if (request.method === 'GET' && url.pathname === '/ra/raw-materials') {
+      const allergen = url.searchParams.get('allergen');
+      const rows = allergen
+        ? await env.DB.prepare('SELECT * FROM ra_raw_material_master WHERE allergen_group LIKE ? ORDER BY material_code').bind('%' + allergen + '%').all()
+        : await env.DB.prepare('SELECT * FROM ra_raw_material_master ORDER BY material_code').all();
+      return json({ data: rows.results, requestId: id });
+    }
+
+    if (request.method === 'GET' && url.pathname === '/ra/label-guidance') {
+      const rows = await env.DB.prepare('SELECT * FROM ra_label_guidance ORDER BY topic').all();
+      return json({ data: rows.results, requestId: id });
+    }
+    if (request.method === 'GET' && url.pathname === '/ra/label-checklist') {
+      const rows = await env.DB.prepare('SELECT * FROM ra_label_release_checklist ORDER BY check_id').all();
+      return json({ data: rows.results, requestId: id });
+    }
+    if (request.method === 'GET' && url.pathname === '/ra/allergen-matrix') {
+      const rows = await env.DB.prepare('SELECT * FROM ra_raw_material_allergen_matrix ORDER BY sku').all();
+      return json({ data: rows.results, requestId: id });
+    }
+
     if (request.method === 'GET' && url.pathname === '/documents') {
       const type = url.searchParams.get('type');
       const department = url.searchParams.get('department');
