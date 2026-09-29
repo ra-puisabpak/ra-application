@@ -267,11 +267,27 @@ export default {
       const taskStates = await env.DB.prepare('SELECT status, COUNT(*) AS count FROM tasks WHERE owner_id = ? GROUP BY status ORDER BY status').bind(effectiveActor.id).all();
       const evidenceStates = await env.DB.prepare('SELECT verification_status AS status, COUNT(*) AS count FROM evidence GROUP BY verification_status ORDER BY verification_status').all();
       const pendingApprovals = await env.DB.prepare("SELECT COUNT(*) AS count FROM approval_steps WHERE status = 'PENDING' AND required_role IN (SELECT role FROM user_roles WHERE user_id = ? AND can_approve = 1)").bind(effectiveActor.id).first<{ count: number }>();
+      const documentTotal = await env.DB.prepare('SELECT COUNT(*) AS count FROM documents').first<{ count: number }>();
+      const documentControlled = await env.DB.prepare("SELECT COUNT(*) AS count FROM documents WHERE status = 'CONTROLLED'").first<{ count: number }>();
+      const documentPending = await env.DB.prepare("SELECT COUNT(*) AS count FROM document_revisions WHERE status = 'PENDING_APPROVAL'").first<{ count: number }>();
+      const productTotal = (productStates.results as Array<{ state: string; count: number }>).reduce((sum, row) => sum + Number(row.count ?? 0), 0);
+      const productEffective = (productStates.results as Array<{ state: string; count: number }>)
+        .filter((row) => ['APPROVED', 'EFFECTIVE'].includes(String(row.state)))
+        .reduce((sum, row) => sum + Number(row.count ?? 0), 0);
       return json({ data: {
         products: productStates.results,
         myTasks: taskStates.results,
         evidence: evidenceStates.results,
-        pendingApprovals: Number(pendingApprovals?.count ?? 0)
+        pendingApprovals: Number(pendingApprovals?.count ?? 0),
+        documents: {
+          total: Number(documentTotal?.count ?? 0),
+          controlled: Number(documentControlled?.count ?? 0),
+          pendingApproval: Number(documentPending?.count ?? 0)
+        },
+        productSummary: {
+          total: productTotal,
+          effective: productEffective
+        }
       }, requestId: id });
     }
 
