@@ -675,7 +675,7 @@ export default {
       return json({ data: { id: ncId, status: 'OPEN' } }, 201);
     }
 
-    const ncStatusMatch = url.pathname.match(/^\\/qa\\/nonconformities\\/([^/]+)\\/status$/);
+    const ncStatusMatch = url.pathname.match(/^\/qa\/nonconformities\/([^/]+)\/status$/);
     if (ncStatusMatch && request.method === 'POST') {
       const actor = await authenticatedActor(request, env); const auth = protectedRoute(actor, id); if (auth) return auth;
       const input = await body<{ status?: string }>(request); const status = input?.status?.toUpperCase();
@@ -705,7 +705,7 @@ export default {
       return json({ data: { id: capaId, status: 'OPEN' } }, 201);
     }
 
-    const capaMatch = url.pathname.match(/^\\/qa\\/capas\\/([^/]+)$/);
+    const capaMatch = url.pathname.match(/^\/qa\/capas\/([^/]+)$/);
     if (capaMatch && request.method === 'GET') {
       const capa = await env.DB.prepare('SELECT * FROM capas WHERE id = ?').bind(capaMatch[1]).first();
       if (!capa) return json({ error: { code: 'NOT_FOUND', message: 'CAPA not found' }, requestId: id }, 404);
