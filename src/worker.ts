@@ -743,6 +743,78 @@ export default {
       return json({ data: { id: capaCloseMatch[1], status: 'CLOSED' } });
     }
 
+    if (url.pathname === '/production/batches' && request.method === 'GET') {
+      const rows = await env.DB.prepare('SELECT * FROM production_batches ORDER BY production_date DESC, created_at DESC').all();
+      return json({ data: rows.results });
+    }
+    if (url.pathname === '/production/batches' && request.method === 'POST') {
+      const actor = await authenticatedActor(request, env); const auth = protectedRoute(actor, id); if (auth) return auth;
+      if (!requireRole(actor, ['QA','QC','R&D','RA'])) return json({error:{code:'FORBIDDEN',message:'QA/QC/R&D/RA role required'},requestId:id},403);
+      const input = await body<Record<string,unknown>>(request);
+      if (!input?.product_id || !input?.batch_lot || !input?.production_date) return json({error:{code:'VALIDATION_ERROR',message:'product_id, batch_lot and production_date are required'},requestId:id},400);
+      const batchId=crypto.randomUUID();
+      await env.DB.prepare('INSERT INTO production_batches (id,product_id,batch_lot,production_date,created_by) VALUES (?,?,?,?,?)').bind(batchId,String(input.product_id),String(input.batch_lot),String(input.production_date),actor!.id).run();
+      await audit(env,actor!,id,'CREATE_PRODUCTION_BATCH','PRODUCTION_BATCH',batchId,undefined,'OPEN');
+      return json({data:{id:batchId,status:'OPEN'}},201);
+    }
+    const batchMatch=url.pathname.match(/^\\/production\\/batches\\/([^/]+)$/);
+    if(batchMatch && request.method==='GET'){
+      const batch=await env.DB.prepare('SELECT * FROM production_batches WHERE id=?').bind(batchMatch[1]).first();
+      if(!batch)return json({error:{code:'NOT_FOUND',message:'Batch not found'},requestId:id},404);
+      const [process,qc,decisions]=await Promise.all([
+        env.DB.prepare('SELECT * FROM production_process_records WHERE batch_id=? ORDER BY recorded_at').bind(batchMatch[1]).all(),
+        env.DB.prepare('SELECT * FROM qc_checks WHERE batch_id=? ORDER BY created_at').bind(batchMatch[1]).all(),
+        env.DB.prepare('SELECT * FROM product_release_decisions WHERE batch_id=? ORDER BY decided_at DESC').bind(batchMatch[1]).all()
+      ]);
+      return json({data:{...batch,process:process.results,qc:qc.results,decisions:decisions.results}});
+    }
+    const processMatch=url.pathname.match(/^\\/production\\/batches\\/([^/]+)\\/process$/);
+    if(processMatch && request.method==='POST'){
+      const actor=await authenticatedActor(request,env); const auth=protectedRoute(actor,id); if(auth)return auth;
+      if(!requireRole(actor,['QA','QC','R&D']))return json({error:{code:'FORBIDDEN',message:'QA/QC/R&D role required'},requestId:id},403);
+      const input=await body<Record<string,unknown>>(request);
+      if(!input?.step_name || !input?.operator_id)return json({error:{code:'VALIDATION_ERROR',message:'step_name and operator_id are required'},requestId:id},400);
+      const batch=await env.DB.prepare('SELECT id FROM production_batches WHERE id=?').bind(processMatch[1]).first();if(!batch)return json({error:{code:'NOT_FOUND',message:'Batch not found'},requestId:id},404);
+      const pid=crypto.randomUUID();await env.DB.prepare('INSERT INTO production_process_records (id,batch_id,step_name,observed_value,unit,operator_id,evidence_ids_json) VALUES (?,?,?,?,?,?,?)').bind(pid,processMatch[1],String(input.step_name),input.observed_value?String(input.observed_value):null,input.unit?String(input.unit):null,String(input.operator_id),input.evidence_ids_json?String(input.evidence_ids_json):null).run();
+      await env.DB.prepare("UPDATE production_batches SET status='IN_PROCESS',updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='OPEN'").bind(processMatch[1]).run();
+      return json({data:{id:pid}},201);
+    }
+    const qcMatch=url.pathname.match(/^\\/production\\/batches\\/([^/]+)\\/qc$/);
+    if(qcMatch && request.method==='POST'){
+      const actor=await authenticatedActor(request,env); const auth=protectedRoute(actor,id); if(auth)return auth;
+      if(!requireRole(actor,['QC','QA']))return json({error:{code:'FORBIDDEN',message:'QC/QA role required'},requestId:id},403);
+      const input=await body<Record<string,unknown>>(request);
+      if(!input?.check_type || !input?.parameter)return json({error:{code:'VALIDATION_ERROR',message:'check_type and parameter are required'},requestId:id},400);
+      if(!['INCOMING','IN_PROCESS','FINISHED_PRODUCT'].includes(String(input.check_type)))return json({error:{code:'VALIDATION_ERROR',message:'Unsupported check_type'},requestId:id},400);
+      if(input.result_status && !['PENDING','PASS','FAIL','N_A','HOLD'].includes(String(input.result_status)))return json({error:{code:'VALIDATION_ERROR',message:'Unsupported result_status'},requestId:id},400);
+      const batch=await env.DB.prepare('SELECT id FROM production_batches WHERE id=?').bind(qcMatch[1]).first();if(!batch)return json({error:{code:'NOT_FOUND',message:'Batch not found'},requestId:id},404);
+      const qid=crypto.randomUUID();await env.DB.prepare('INSERT INTO qc_checks (id,batch_id,check_type,parameter,specification,result_value,unit,result_status,checked_by,checked_at,evidence_ids_json) VALUES (?,?,?,?,?,?,?,?,?,?,?)').bind(qid,qcMatch[1],String(input.check_type),String(input.parameter),input.specification?String(input.specification):null,input.result_value?String(input.result_value):null,input.unit?String(input.unit):null,input.result_status?String(input.result_status):'PENDING',actor!.id,input.result_status&&input.result_status!=='PENDING'?new Date().toISOString():null,input.evidence_ids_json?String(input.evidence_ids_json):null).run();
+      await env.DB.prepare("UPDATE production_batches SET status='QC_PENDING',updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(qcMatch[1]).run();
+      return json({data:{id:qid}},201);
+    }
+    const qcu=url.pathname.match(/^\\/production\\/qc\\/([^/]+)\\/result$/);
+    if(qcu && request.method==='POST'){
+      const actor=await authenticatedActor(request,env); const auth=protectedRoute(actor,id); if(auth)return auth;
+      if(!requireRole(actor,['QC','QA']))return json({error:{code:'FORBIDDEN',message:'QC/QA role required'},requestId:id},403);
+      const input=await body<Record<string,unknown>>(request);const status=String(input?.result_status||'').toUpperCase();if(!['PASS','FAIL','N_A','HOLD','PENDING'].includes(status))return json({error:{code:'VALIDATION_ERROR',message:'Unsupported result_status'},requestId:id},400);
+      const current=await env.DB.prepare('SELECT batch_id,result_status FROM qc_checks WHERE id=?').bind(qcu[1]).first<{batch_id:string;result_status:string}>();if(!current)return json({error:{code:'NOT_FOUND',message:'QC check not found'},requestId:id},404);
+      await env.DB.prepare('UPDATE qc_checks SET result_status=?,result_value=?,checked_by=?,checked_at=? WHERE id=?').bind(status,input.result_value?String(input.result_value):null,actor!.id,new Date().toISOString(),qcu[1]).run();
+      await audit(env,actor!,id,'UPDATE_QC_RESULT','QC_CHECK',qcu[1],current.result_status,status);
+      return json({data:{id:qcu[1],status}});
+    }
+    const rel=url.pathname.match(/^\\/production\\/batches\\/([^/]+)\\/release$/);
+    if(rel && request.method==='POST'){
+      const actor=await authenticatedActor(request,env); const auth=protectedRoute(actor,id); if(auth)return auth;
+      if(!requireRole(actor,['QA']))return json({error:{code:'FORBIDDEN',message:'QA role required for release decision'},requestId:id},403);
+      const input=await body<{decision?:string;reason?:string}>(request);const decision=String(input?.decision||'').toUpperCase();if(!['HOLD','RELEASE','REJECT'].includes(decision))return json({error:{code:'VALIDATION_ERROR',message:'Unsupported release decision'},requestId:id},400);
+      const batch=await env.DB.prepare('SELECT id FROM production_batches WHERE id=?').bind(rel[1]).first();if(!batch)return json({error:{code:'NOT_FOUND',message:'Batch not found'},requestId:id},404);
+      const fail=await env.DB.prepare("SELECT COUNT(*) AS count FROM qc_checks WHERE batch_id=? AND result_status IN ('FAIL','HOLD')").bind(rel[1]).first<{count:number}>();
+      if(decision==='RELEASE' && (fail?.count||0)>0)return json({error:{code:'RELEASE_GATE',message:'Cannot release while QC contains FAIL or HOLD'},requestId:id},409);
+      const did=crypto.randomUUID();await env.DB.prepare('INSERT INTO product_release_decisions (id,batch_id,decision,reason,decided_by) VALUES (?,?,?,?,?)').bind(did,rel[1],decision,input?.reason?String(input.reason):null,actor!.id).run();
+      const next=decision==='RELEASE'?'RELEASED':decision==='HOLD'?'HOLD':'CLOSED';await env.DB.prepare('UPDATE production_batches SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').bind(next,rel[1]).run();
+      await audit(env,actor!,id,'PRODUCT_RELEASE_DECISION','PRODUCTION_BATCH',rel[1],undefined,decision);return json({data:{id:did,decision,status:next}});
+    }
+
     if (request.method === 'GET' && url.pathname === '/documents') {
       const type = url.searchParams.get('type');
       const department = url.searchParams.get('department');
