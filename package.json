@@ -3,12 +3,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "test": "rm -rf .test-build && tsc --outDir .test-build --noEmit false && node --test test/**/*.test.mjs",
+    "typecheck": "npm run generate-types && tsc --noEmit",
+    "test": "npm run generate-types && rm -rf .test-build && tsc --outDir .test-build --noEmit false && node --test test/**/*.test.mjs",
     "dev": "wrangler dev",
     "deploy": "npm run db:migrate && wrangler deploy",
     "db:migrate:local": "wrangler d1 migrations apply ra-application --local",
-    "db:migrate": "wrangler d1 migrations apply ra-application --remote"
+    "db:migrate": "wrangler d1 migrations apply ra-application --remote",
+    "generate-types": "wrangler types worker-configuration.d.ts --include-env=false"
   },
   "devDependencies": {
     "wrangler": "^4.38.0"
