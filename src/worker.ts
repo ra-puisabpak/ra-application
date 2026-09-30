@@ -299,7 +299,7 @@ export default {
     }
     if (request.method === 'POST' && url.pathname === '/products') {
       if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
-      if (!requireRole(actor, ['RA', 'R&D'])) return json({ error: { code: 'FORBIDDEN', message: 'RA or R&D role required' }, requestId: id }, 403);
+      if (!requireRole(actor!, ['RA', 'R&D'])) return json({ error: { code: 'FORBIDDEN', message: 'RA or R&D role required' }, requestId: id }, 403);
       const input = await body<ProductInput>(request);
       if (!input?.productCode?.trim() || !input.thaiName?.trim() || !input.siteId?.trim()) return json({ error: { code: 'VALIDATION_ERROR', message: 'productCode, thaiName and siteId are required' }, requestId: id }, 400);
       const productId = crypto.randomUUID();
@@ -321,7 +321,7 @@ export default {
       if (request.method === 'GET') return json({ data: productFromRow(existing), requestId: id });
       if (request.method === 'PATCH') {
         if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
-        if (!requireRole(actor, ['RA', 'R&D'])) return json({ error: { code: 'FORBIDDEN', message: 'RA or R&D role required' }, requestId: id }, 403);
+        if (!requireRole(actor!, ['RA', 'R&D'])) return json({ error: { code: 'FORBIDDEN', message: 'RA or R&D role required' }, requestId: id }, 403);
         const input = await body<ProductInput>(request);
         const product = productFromRow(existing);
         if (!input || input.expectedVersion !== product.version) return json({ error: { code: 'CONFLICT', message: 'expectedVersion must match the current product version' }, requestId: id }, 409);
@@ -338,7 +338,7 @@ export default {
     const submit = url.pathname.match(/^\/products\/([a-f0-9-]+)\/submit$/);
     if (request.method === 'POST' && submit) {
       if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
-      if (!requireRole(actor, ['RA', 'R&D'])) return json({ error: { code: 'FORBIDDEN', message: 'RA or R&D role required' }, requestId: id }, 403);
+      if (!requireRole(actor!, ['RA', 'R&D'])) return json({ error: { code: 'FORBIDDEN', message: 'RA or R&D role required' }, requestId: id }, 403);
       const product = await env.DB.prepare('SELECT id, revision, state FROM products WHERE id = ?').bind(submit[1]).first<{ id: string; revision: string; state: string }>();
       if (!product) return json({ error: { code: 'NOT_FOUND', message: 'Product not found' }, requestId: id }, 404);
       if (product.state !== 'DRAFT' && product.state !== 'RETURNED') return json({ error: { code: 'INVALID_STATE', message: 'Only DRAFT or RETURNED products can be submitted' }, requestId: id }, 409);
@@ -354,7 +354,7 @@ export default {
 
     if (request.method === 'POST' && url.pathname === '/evidence') {
       if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
-      if (!requireRole(actor, ['RA', 'QA', 'QC', 'DCC', 'R&D'])) return json({ error: { code: 'FORBIDDEN', message: 'Evidence upload role required' }, requestId: id }, 403);
+      if (!requireRole(actor!, ['RA', 'QA', 'QC', 'DCC', 'R&D'])) return json({ error: { code: 'FORBIDDEN', message: 'Evidence upload role required' }, requestId: id }, 403);
       const input = await body<EvidenceInput>(request);
       if (!input?.recordType || !input.recordId || !input.title?.trim() || !input.revision?.trim() || !input.contentType?.trim()) return json({ error: { code: 'VALIDATION_ERROR', message: 'recordType, recordId, title, revision and contentType are required' }, requestId: id }, 400);
       if (input.recordType !== 'PRODUCT' || !await env.DB.prepare('SELECT id FROM products WHERE id = ?').bind(input.recordId).first()) return json({ error: { code: 'VALIDATION_ERROR', message: 'Only PRODUCT evidence records are supported' }, requestId: id }, 400);
@@ -370,7 +370,7 @@ export default {
     const upload = url.pathname.match(/^\/files\/upload\/([a-f0-9-]+)$/);
     if (request.method === 'PUT' && upload) {
       if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
-      if (!requireRole(actor, ['RA', 'QA', 'QC', 'DCC', 'R&D'])) return json({ error: { code: 'FORBIDDEN', message: 'Evidence upload role required' }, requestId: id }, 403);
+      if (!requireRole(actor!, ['RA', 'QA', 'QC', 'DCC', 'R&D'])) return json({ error: { code: 'FORBIDDEN', message: 'Evidence upload role required' }, requestId: id }, 403);
       const evidence = await env.DB.prepare('SELECT storage_key FROM evidence WHERE id = ? AND uploaded_by = ?').bind(upload[1], actor.id).first<{ storage_key: string }>();
       if (!evidence) return json({ error: { code: 'NOT_FOUND', message: 'Evidence record not found or not owned by actor' }, requestId: id }, 404);
       const bytes = await request.arrayBuffer();
@@ -385,7 +385,7 @@ export default {
     const verify = url.pathname.match(/^\/evidence\/([a-f0-9-]+)\/verify$/);
     if (request.method === 'PATCH' && verify) {
       if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
-      if (!requireRole(actor, ['RA', 'QA'])) return json({ error: { code: 'FORBIDDEN', message: 'RA or QA role required' }, requestId: id }, 403);
+      if (!requireRole(actor!, ['RA', 'QA'])) return json({ error: { code: 'FORBIDDEN', message: 'RA or QA role required' }, requestId: id }, 403);
       const evidence = await env.DB.prepare('SELECT verification_status FROM evidence WHERE id = ?').bind(verify[1]).first<{ verification_status: string }>();
       if (!evidence) return json({ error: { code: 'NOT_FOUND', message: 'Evidence not found' }, requestId: id }, 404);
       if (evidence.verification_status !== 'PENDING_VERIFICATION') return json({ error: { code: 'INVALID_STATE', message: 'Only uploaded evidence can be verified' }, requestId: id }, 409);
@@ -435,7 +435,7 @@ export default {
     const docChangeCreate = url.pathname.match(/^\/documents\/([^/]+)\/changes$/);
     if (request.method === 'POST' && docChangeCreate) {
       if (!actor) return json({ error:{code:'UNAUTHENTICATED',message:'Login required'},requestId:id },401);
-      if (!requireRole(actor,['DCC','RA'])) return json({error:{code:'FORBIDDEN',message:'DCC or RA role required'},requestId:id},403);
+      if (!requireRole(actor!,['DCC','RA'])) return json({error:{code:'FORBIDDEN',message:'DCC or RA role required'},requestId:id},403);
       const documentId=docChangeCreate[1]; const doc=await env.DB.prepare('SELECT id,revision FROM documents WHERE id=?').bind(documentId).first<{id:string;revision:string}>();
       if(!doc)return json({error:{code:'NOT_FOUND',message:'Document not found'},requestId:id},404);
       const input=await body<{to_revision?:string;reason?:string}>(request);
@@ -467,7 +467,7 @@ export default {
     const documentRevisionCreate = url.pathname.match(/^\/documents\/([^/]+)\/revisions$/);    const docSubmit=url.pathname.match(/^\/documents\/([^/]+)\/revisions\/([^/]+)\/submit$/);
     if(request.method==='POST'&&docSubmit){
       if(!actor)return json({error:{code:'UNAUTHENTICATED',message:'Login required'},requestId:id},401);
-      if(!requireRole(actor,['DCC','RA']))return json({error:{code:'FORBIDDEN',message:'DCC or RA role required'},requestId:id},403);
+      if(!requireRole(actor!,['DCC','RA']))return json({error:{code:'FORBIDDEN',message:'DCC or RA role required'},requestId:id},403);
       const documentId=docSubmit[1],revision=docSubmit[2]; const input=await body<{required_role?:string}>(request);
       const role=input?.required_role?.trim()?.toUpperCase(); const allowed=['RA','QA','QC','DCC','R&D','MANAGEMENT'];
       if(!role||!allowed.includes(role))return json({error:{code:'VALIDATION_ERROR',message:'required_role is required'},requestId:id},400);
@@ -515,7 +515,7 @@ export default {
     const docSupersede = url.pathname.match(/^\/documents\/([^/]+)\/supersede$/);
     if (request.method === 'POST' && docSupersede) {
       if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
-      if (!requireRole(actor, ['DCC', 'RA'])) return json({ error: { code: 'FORBIDDEN', message: 'DCC or RA role required' }, requestId: id }, 403);
+      if (!requireRole(actor!, ['DCC', 'RA'])) return json({ error: { code: 'FORBIDDEN', message: 'DCC or RA role required' }, requestId: id }, 403);
       const documentId = docSupersede[1];
       const input = await body<{ superseded_by?: string; reason?: string }>(request);
       if (!input?.superseded_by?.trim() || !input.reason?.trim()) return json({ error: { code: 'VALIDATION_ERROR', message: 'superseded_by and reason are required' }, requestId: id }, 400);
@@ -536,7 +536,7 @@ export default {
     const docObsolete = url.pathname.match(/^\/documents\/([^/]+)\/obsolete$/);
     if (request.method === 'POST' && docObsolete) {
       if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
-      if (!requireRole(actor, ['DCC', 'RA'])) return json({ error: { code: 'FORBIDDEN', message: 'DCC or RA role required' }, requestId: id }, 403);
+      if (!requireRole(actor!, ['DCC', 'RA'])) return json({ error: { code: 'FORBIDDEN', message: 'DCC or RA role required' }, requestId: id }, 403);
       const documentId = docObsolete[1];
       const input = await body<{ reason?: string }>(request);
       if (!input?.reason?.trim()) return json({ error: { code: 'VALIDATION_ERROR', message: 'reason is required' }, requestId: id }, 400);
@@ -610,7 +610,7 @@ export default {
     }
     if (request.method === 'POST' && url.pathname === '/ra/suppliers') {
       if (!actor) return json({ error: { code:'UNAUTHENTICATED', message:'Login required' }, requestId:id },401);
-      if (!requireRole(actor,['RA','QA','QC','DCC'])) return json({ error:{code:'FORBIDDEN',message:'RA/QA/QC/DCC role required'},requestId:id},403);
+      if (!requireRole(actor!,['RA','QA','QC','DCC'])) return json({ error:{code:'FORBIDDEN',message:'RA/QA/QC/DCC role required'},requestId:id},403);
       const input=await body<{supplier_code?:string;supplier_name?:string;notes?:string}>(request);
       if(!input?.supplier_code?.trim()||!input?.supplier_name?.trim()) return json({error:{code:'VALIDATION_ERROR',message:'supplier_code and supplier_name are required'},requestId:id},400);
       const sid=crypto.randomUUID();
@@ -625,11 +625,11 @@ export default {
       const supplier=await env.DB.prepare('SELECT * FROM supplier_master WHERE supplier_id=?').bind(supplierId).first<any>();
       if(!supplier)return json({error:{code:'NOT_FOUND',message:'Supplier not found'},requestId:id},404);
       if(action==='submit'){
-        if(!requireRole(actor,['RA','QA','QC','DCC']))return json({error:{code:'FORBIDDEN',message:'RA/QA/QC/DCC role required'},requestId:id},403);
+        if(!requireRole(actor!,['RA','QA','QC','DCC']))return json({error:{code:'FORBIDDEN',message:'RA/QA/QC/DCC role required'},requestId:id},403);
         if(supplier.status!=='DRAFT'&&supplier.status!=='REJECTED')return json({error:{code:'INVALID_STATE',message:'Supplier must be DRAFT or REJECTED'},requestId:id},409);
         await env.DB.batch([env.DB.prepare("UPDATE supplier_master SET status='PENDING_REVIEW',updated_at=CURRENT_TIMESTAMP WHERE supplier_id=?").bind(supplierId),env.DB.prepare("INSERT INTO supplier_review_events(id,supplier_id,action,previous_status,new_status,actor_id,comment) VALUES(?,?,?,?,?,?,?)").bind(crypto.randomUUID(),supplierId,'SUBMIT',supplier.status,'PENDING_REVIEW',actor.id,input?.comment||null)]);
       } else {
-        if(!requireRole(actor,['RA','QA','QC']))return json({error:{code:'FORBIDDEN',message:'RA/QA/QC role required'},requestId:id},403);
+        if(!requireRole(actor!,['RA','QA','QC']))return json({error:{code:'FORBIDDEN',message:'RA/QA/QC role required'},requestId:id},403);
         if(supplier.status!=='PENDING_REVIEW')return json({error:{code:'INVALID_STATE',message:'Supplier must be PENDING_REVIEW'},requestId:id},409);
         const next=action==='approve'?'APPROVED':action==='reject'?'REJECTED':'SUSPENDED';
         if((action==='reject'||action==='suspend')&&!input?.comment?.trim())return json({error:{code:'VALIDATION_ERROR',message:'comment is required'},requestId:id},400);
@@ -645,7 +645,7 @@ export default {
     }
     if(request.method==='POST'&&url.pathname.match(/^\/ra\/suppliers\/[^/]+\/materials$/)){
       if(!actor)return json({error:{code:'UNAUTHENTICATED',message:'Login required'},requestId:id},401);
-      if(!requireRole(actor,['RA','QA','QC','DCC']))return json({error:{code:'FORBIDDEN',message:'RA/QA/QC/DCC role required'},requestId:id},403);
+      if(!requireRole(actor!,['RA','QA','QC','DCC']))return json({error:{code:'FORBIDDEN',message:'RA/QA/QC/DCC role required'},requestId:id},403);
       const supplierId=url.pathname.split('/')[3]; const input=await body<{material_code?:string}>(request);
       if(!input?.material_code)return json({error:{code:'VALIDATION_ERROR',message:'material_code is required'},requestId:id},400);
       const exists=await env.DB.prepare('SELECT 1 FROM ra_raw_material_master WHERE material_code=?').bind(input.material_code).first(); if(!exists)return json({error:{code:'NOT_FOUND',message:'Raw material not found'},requestId:id},404);
@@ -767,7 +767,7 @@ export default {
     }
     if (url.pathname === '/production/batches' && request.method === 'POST') {
       const actor = await authenticatedActor(request, env); const auth = protectedRoute(actor, id); if (auth) return auth;
-      if (!requireRole(actor, ['QA','QC','R&D','RA'])) return json({error:{code:'FORBIDDEN',message:'QA/QC/R&D/RA role required'},requestId:id},403);
+      if (!requireRole(actor!, ['QA','QC','R&D','RA'])) return json({error:{code:'FORBIDDEN',message:'QA/QC/R&D/RA role required'},requestId:id},403);
       const input = await body<Record<string,unknown>>(request);
       if (!input?.product_id || !input?.batch_lot || !input?.production_date) return json({error:{code:'VALIDATION_ERROR',message:'product_id, batch_lot and production_date are required'},requestId:id},400);
       const batchId=crypto.randomUUID();
@@ -789,7 +789,7 @@ export default {
     const processMatch=url.pathname.match(/^\/production\/batches\/([^/]+)\/process$/);
     if(processMatch && request.method==='POST'){
       const actor=await authenticatedActor(request,env); const auth=protectedRoute(actor,id); if(auth)return auth;
-      if(!requireRole(actor,['QA','QC','R&D']))return json({error:{code:'FORBIDDEN',message:'QA/QC/R&D role required'},requestId:id},403);
+      if(!requireRole(actor!,['QA','QC','R&D']))return json({error:{code:'FORBIDDEN',message:'QA/QC/R&D role required'},requestId:id},403);
       const input=await body<Record<string,unknown>>(request);
       if(!input?.step_name || !input?.operator_id)return json({error:{code:'VALIDATION_ERROR',message:'step_name and operator_id are required'},requestId:id},400);
       const batch=await env.DB.prepare('SELECT id FROM production_batches WHERE id=?').bind(processMatch[1]).first();if(!batch)return json({error:{code:'NOT_FOUND',message:'Batch not found'},requestId:id},404);
@@ -800,30 +800,30 @@ export default {
     const qcMatch=url.pathname.match(/^\/production\/batches\/([^/]+)\/qc$/);
     if(qcMatch && request.method==='POST'){
       const actor=await authenticatedActor(request,env); const auth=protectedRoute(actor,id); if(auth)return auth;
-      if(!requireRole(actor,['QC','QA']))return json({error:{code:'FORBIDDEN',message:'QC/QA role required'},requestId:id},403);
+      if(!requireRole(actor!,['QC','QA']))return json({error:{code:'FORBIDDEN',message:'QC/QA role required'},requestId:id},403);
       const input=await body<Record<string,unknown>>(request);
       if(!input?.check_type || !input?.parameter)return json({error:{code:'VALIDATION_ERROR',message:'check_type and parameter are required'},requestId:id},400);
       if(!['INCOMING','IN_PROCESS','FINISHED_PRODUCT'].includes(String(input.check_type)))return json({error:{code:'VALIDATION_ERROR',message:'Unsupported check_type'},requestId:id},400);
       if(input.result_status && !['PENDING','PASS','FAIL','N_A','HOLD'].includes(String(input.result_status)))return json({error:{code:'VALIDATION_ERROR',message:'Unsupported result_status'},requestId:id},400);
       const batch=await env.DB.prepare('SELECT id FROM production_batches WHERE id=?').bind(qcMatch[1]).first();if(!batch)return json({error:{code:'NOT_FOUND',message:'Batch not found'},requestId:id},404);
-      const qid=crypto.randomUUID();await env.DB.prepare('INSERT INTO qc_checks (id,batch_id,check_type,parameter,specification,result_value,unit,result_status,checked_by,checked_at,evidence_ids_json) VALUES (?,?,?,?,?,?,?,?,?,?,?)').bind(qid,qcMatch[1],String(input.check_type),String(input.parameter),input.specification?String(input.specification):null,input.result_value?String(input.result_value):null,input.unit?String(input.unit):null,input.result_status?String(input.result_status):'PENDING',actor!.id,input.result_status&&input.result_status!=='PENDING'?new Date().toISOString():null,input.evidence_ids_json?String(input.evidence_ids_json):null).run();
+      const qid=crypto.randomUUID();await env.DB.prepare('INSERT INTO qc_checks (id,batch_id,check_type,parameter,specification,result_value,unit,result_status,checked_by,checked_at,evidence_ids_json) VALUES (?,?,?,?,?,?,?,?,?,?,?)').bind(qid,qcMatch[1],String(input.check_type),String(input.parameter),input.specification?String(input.specification):null,input?.result_value?String(input.result_value):null,input.unit?String(input.unit):null,input.result_status?String(input.result_status):'PENDING',actor!.id,input.result_status&&input.result_status!=='PENDING'?new Date().toISOString():null,input.evidence_ids_json?String(input.evidence_ids_json):null).run();
       await env.DB.prepare("UPDATE production_batches SET status='QC_PENDING',updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(qcMatch[1]).run();
       return json({data:{id:qid}},201);
     }
     const qcu=url.pathname.match(/^\/production\/qc\/([^/]+)\/result$/);
     if(qcu && request.method==='POST'){
       const actor=await authenticatedActor(request,env); const auth=protectedRoute(actor,id); if(auth)return auth;
-      if(!requireRole(actor,['QC','QA']))return json({error:{code:'FORBIDDEN',message:'QC/QA role required'},requestId:id},403);
+      if(!requireRole(actor!,['QC','QA']))return json({error:{code:'FORBIDDEN',message:'QC/QA role required'},requestId:id},403);
       const input=await body<Record<string,unknown>>(request);const status=String(input?.result_status||'').toUpperCase();if(!['PASS','FAIL','N_A','HOLD','PENDING'].includes(status))return json({error:{code:'VALIDATION_ERROR',message:'Unsupported result_status'},requestId:id},400);
       const current=await env.DB.prepare('SELECT batch_id,result_status FROM qc_checks WHERE id=?').bind(qcu[1]).first<{batch_id:string;result_status:string}>();if(!current)return json({error:{code:'NOT_FOUND',message:'QC check not found'},requestId:id},404);
-      await env.DB.prepare('UPDATE qc_checks SET result_status=?,result_value=?,checked_by=?,checked_at=? WHERE id=?').bind(status,input.result_value?String(input.result_value):null,actor!.id,new Date().toISOString(),qcu[1]).run();
+      await env.DB.prepare('UPDATE qc_checks SET result_status=?,result_value=?,checked_by=?,checked_at=? WHERE id=?').bind(status,input?.result_value?String(input.result_value):null,actor!.id,new Date().toISOString(),qcu[1]).run();
       await audit(env,actor!,id,'UPDATE_QC_RESULT','QC_CHECK',qcu[1],current.result_status,status);
       return json({data:{id:qcu[1],status}});
     }
     const rel=url.pathname.match(/^\/production\/batches\/([^/]+)\/release$/);
     if(rel && request.method==='POST'){
       const actor=await authenticatedActor(request,env); const auth=protectedRoute(actor,id); if(auth)return auth;
-      if(!requireRole(actor,['QA']))return json({error:{code:'FORBIDDEN',message:'QA role required for release decision'},requestId:id},403);
+      if(!requireRole(actor!,['QA']))return json({error:{code:'FORBIDDEN',message:'QA role required for release decision'},requestId:id},403);
       const input=await body<{decision?:string;reason?:string}>(request);const decision=String(input?.decision||'').toUpperCase();if(!['HOLD','RELEASE','REJECT'].includes(decision))return json({error:{code:'VALIDATION_ERROR',message:'Unsupported release decision'},requestId:id},400);
       const batch=await env.DB.prepare('SELECT id FROM production_batches WHERE id=?').bind(rel[1]).first();if(!batch)return json({error:{code:'NOT_FOUND',message:'Batch not found'},requestId:id},404);
       const fail=await env.DB.prepare("SELECT COUNT(*) AS count FROM qc_checks WHERE batch_id=? AND result_status IN ('FAIL','HOLD')").bind(rel[1]).first<{count:number}>();
@@ -834,17 +834,17 @@ export default {
     }
 
     if (url.pathname === '/training/requirements' && request.method === 'GET') { const rows=await env.DB.prepare('SELECT * FROM training_requirements ORDER BY created_at DESC').all(); return json({data:rows.results}); }
-    if (url.pathname === '/training/requirements' && request.method === 'POST') { const actor=await authenticatedActor(request,env);const auth=protectedRoute(actor,id);if(auth)return auth; if(!requireRole(actor,['DCC','QA','RA','QC']))return json({error:{code:'FORBIDDEN',message:'DCC/QA/RA/QC role required'},requestId:id},403); const input=await body<Record<string,unknown>>(request); if(!input?.type||!input?.source_record_id||!input?.role_ids_json)return json({error:{code:'VALIDATION_ERROR',message:'type, source_record_id and role_ids_json are required'},requestId:id},400); if(!['DOCUMENT_REVISION','REGULATORY_CHANGE','PROCESS_CHANGE','ROLE_COMPETENCY','CAPA'].includes(String(input.type)))return json({error:{code:'VALIDATION_ERROR',message:'Unsupported training type'},requestId:id},400); const tid=crypto.randomUUID(); await env.DB.prepare('INSERT INTO training_requirements (id,type,source_record_id,document_revision,role_ids_json,required_by,status,completion_evidence_ids_json) VALUES (?,?,?,?,?,?,?,?)').bind(tid,String(input.type),String(input.source_record_id),input.document_revision?String(input.document_revision):null,String(input.role_ids_json),input.required_by?String(input.required_by):null,input.status?String(input.status):'REQUIRED',input.completion_evidence_ids_json?String(input.completion_evidence_ids_json):null).run(); return json({data:{id:tid,status:input.status||'REQUIRED'}},201); }
+    if (url.pathname === '/training/requirements' && request.method === 'POST') { const actor=await authenticatedActor(request,env);const auth=protectedRoute(actor,id);if(auth)return auth; if(!requireRole(actor!,['DCC','QA','RA','QC']))return json({error:{code:'FORBIDDEN',message:'DCC/QA/RA/QC role required'},requestId:id},403); const input=await body<Record<string,unknown>>(request); if(!input?.type||!input?.source_record_id||!input?.role_ids_json)return json({error:{code:'VALIDATION_ERROR',message:'type, source_record_id and role_ids_json are required'},requestId:id},400); if(!['DOCUMENT_REVISION','REGULATORY_CHANGE','PROCESS_CHANGE','ROLE_COMPETENCY','CAPA'].includes(String(input.type)))return json({error:{code:'VALIDATION_ERROR',message:'Unsupported training type'},requestId:id},400); const tid=crypto.randomUUID(); await env.DB.prepare('INSERT INTO training_requirements (id,type,source_record_id,document_revision,role_ids_json,required_by,status,completion_evidence_ids_json) VALUES (?,?,?,?,?,?,?,?)').bind(tid,String(input.type),String(input.source_record_id),input.document_revision?String(input.document_revision):null,String(input.role_ids_json),input.required_by?String(input.required_by):null,input.status?String(input.status):'REQUIRED',input.completion_evidence_ids_json?String(input.completion_evidence_ids_json):null).run(); return json({data:{id:tid,status:input.status||'REQUIRED'}},201); }
     const trm=url.pathname.match(/^\/training\/requirements\/([^/]+)\/status$/); if(trm&&request.method==='POST'){const actor=await authenticatedActor(request,env);const auth=protectedRoute(actor,id);if(auth)return auth;const input=await body<{status?:string;completion_evidence_ids_json?:string}>(request);const status=String(input?.status||'').toUpperCase();if(!['REQUIRED','ASSIGNED','IN_PROGRESS','COMPLETED','WAIVED','OVERDUE','CANCELLED'].includes(status))return json({error:{code:'VALIDATION_ERROR',message:'Unsupported training status'},requestId:id},400);const cur=await env.DB.prepare('SELECT status FROM training_requirements WHERE id=?').bind(trm[1]).first<{status:string}>();if(!cur)return json({error:{code:'NOT_FOUND',message:'Training requirement not found'},requestId:id},404);if(['COMPLETED','WAIVED'].includes(status)&&(!input?.completion_evidence_ids_json||!String(input.completion_evidence_ids_json).trim()||String(input.completion_evidence_ids_json).trim()==='[]'))return json({error:{code:'EVIDENCE_REQUIRED',message:'Completion evidence is required'},requestId:id},400);await env.DB.prepare('UPDATE training_requirements SET status=?,completion_evidence_ids_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').bind(status,input?.completion_evidence_ids_json||null,trm[1]).run();await audit(env,actor!,id,'UPDATE_TRAINING_STATUS','TRAINING_REQUIREMENT',trm[1],cur.status,status);return json({data:{id:trm[1],status}});}
     if(url.pathname==='/training/competencies'&&request.method==='GET'){const rows=await env.DB.prepare('SELECT * FROM competency_records ORDER BY assessed_date DESC').all();return json({data:rows.results});}
-    if(url.pathname==='/training/competencies'&&request.method==='POST'){const actor=await authenticatedActor(request,env);const auth=protectedRoute(actor,id);if(auth)return auth;if(!requireRole(actor,['QA','DCC']))return json({error:{code:'FORBIDDEN',message:'QA/DCC role required'},requestId:id},403);const input=await body<Record<string,unknown>>(request);if(!input?.user_id||!input?.competency_code||!input?.assessed_date||!input?.assessor_id)return json({error:{code:'VALIDATION_ERROR',message:'user_id, competency_code, assessed_date and assessor_id are required'},requestId:id},400);const cid=crypto.randomUUID();await env.DB.prepare('INSERT INTO competency_records (id,user_id,competency_code,assessed_date,assessor_id,valid_until,evidence_ids_json,status) VALUES (?,?,?,?,?,?,?,?)').bind(cid,String(input.user_id),String(input.competency_code),String(input.assessed_date),String(input.assessor_id),input.valid_until?String(input.valid_until):null,input.evidence_ids_json?String(input.evidence_ids_json):null,input.status?String(input.status):'UNDER_REVIEW').run();return json({data:{id:cid}},201);}
+    if(url.pathname==='/training/competencies'&&request.method==='POST'){const actor=await authenticatedActor(request,env);const auth=protectedRoute(actor,id);if(auth)return auth;if(!requireRole(actor!,['QA','DCC']))return json({error:{code:'FORBIDDEN',message:'QA/DCC role required'},requestId:id},403);const input=await body<Record<string,unknown>>(request);if(!input?.user_id||!input?.competency_code||!input?.assessed_date||!input?.assessor_id)return json({error:{code:'VALIDATION_ERROR',message:'user_id, competency_code, assessed_date and assessor_id are required'},requestId:id},400);const cid=crypto.randomUUID();await env.DB.prepare('INSERT INTO competency_records (id,user_id,competency_code,assessed_date,assessor_id,valid_until,evidence_ids_json,status) VALUES (?,?,?,?,?,?,?,?)').bind(cid,String(input.user_id),String(input.competency_code),String(input.assessed_date),String(input.assessor_id),input.valid_until?String(input.valid_until):null,input.evidence_ids_json?String(input.evidence_ids_json):null,input.status?String(input.status):'UNDER_REVIEW').run();return json({data:{id:cid}},201);}
     if(url.pathname==='/traceability/events'&&request.method==='GET'){const rows=await env.DB.prepare('SELECT * FROM traceability_events ORDER BY event_date DESC,created_at DESC').all();return json({data:rows.results});}
-    if(url.pathname==='/traceability/events'&&request.method==='POST'){const actor=await authenticatedActor(request,env);const auth=protectedRoute(actor,id);if(auth)return auth;if(!requireRole(actor,['QA','QC','RA']))return json({error:{code:'FORBIDDEN',message:'QA/QC/RA role required'},requestId:id},403);const input=await body<Record<string,unknown>>(request);if(!input?.event_type||!input?.event_date)return json({error:{code:'VALIDATION_ERROR',message:'event_type and event_date are required'},requestId:id},400);if(!['RECEIPT','PRODUCTION','PACKING','RELEASE','DISTRIBUTION','HOLD','WITHDRAWAL','RECALL'].includes(String(input.event_type)))return json({error:{code:'VALIDATION_ERROR',message:'Unsupported event type'},requestId:id},400);const eid=crypto.randomUUID();await env.DB.prepare('INSERT INTO traceability_events (id,event_type,from_type,from_id,to_type,to_id,event_date,evidence_ids_json,created_by) VALUES (?,?,?,?,?,?,?,?,?)').bind(eid,String(input.event_type),input.from_type?String(input.from_type):null,input.from_id?String(input.from_id):null,input.to_type?String(input.to_type):null,input.to_id?String(input.to_id):null,String(input.event_date),input.evidence_ids_json?String(input.evidence_ids_json):null,actor!.id).run();return json({data:{id:eid}},201);}
+    if(url.pathname==='/traceability/events'&&request.method==='POST'){const actor=await authenticatedActor(request,env);const auth=protectedRoute(actor,id);if(auth)return auth;if(!requireRole(actor!,['QA','QC','RA']))return json({error:{code:'FORBIDDEN',message:'QA/QC/RA role required'},requestId:id},403);const input=await body<Record<string,unknown>>(request);if(!input?.event_type||!input?.event_date)return json({error:{code:'VALIDATION_ERROR',message:'event_type and event_date are required'},requestId:id},400);if(!['RECEIPT','PRODUCTION','PACKING','RELEASE','DISTRIBUTION','HOLD','WITHDRAWAL','RECALL'].includes(String(input.event_type)))return json({error:{code:'VALIDATION_ERROR',message:'Unsupported event type'},requestId:id},400);const eid=crypto.randomUUID();await env.DB.prepare('INSERT INTO traceability_events (id,event_type,from_type,from_id,to_type,to_id,event_date,evidence_ids_json,created_by) VALUES (?,?,?,?,?,?,?,?,?)').bind(eid,String(input.event_type),input.from_type?String(input.from_type):null,input.from_id?String(input.from_id):null,input.to_type?String(input.to_type):null,input.to_id?String(input.to_id):null,String(input.event_date),input.evidence_ids_json?String(input.evidence_ids_json):null,actor!.id).run();return json({data:{id:eid}},201);}
     if(url.pathname==='/recalls'&&request.method==='GET'){const rows=await env.DB.prepare('SELECT * FROM recall_cases ORDER BY created_at DESC').all();return json({data:rows.results});}
-    if(url.pathname==='/recalls'&&request.method==='POST'){const actor=await authenticatedActor(request,env);const auth=protectedRoute(actor,id);if(auth)return auth;if(!requireRole(actor,['QA','RA']))return json({error:{code:'FORBIDDEN',message:'QA/RA role required'},requestId:id},403);const input=await body<Record<string,unknown>>(request);if(!input?.product_id||!input?.reason)return json({error:{code:'VALIDATION_ERROR',message:'product_id and reason are required'},requestId:id},400);const rid=crypto.randomUUID();await env.DB.prepare('INSERT INTO recall_cases (id,product_id,reason,linked_nonconformity_id,linked_capa_id,evidence_ids_json,created_by) VALUES (?,?,?,?,?,?,?)').bind(rid,String(input.product_id),String(input.reason),input.linked_nonconformity_id?String(input.linked_nonconformity_id):null,input.linked_capa_id?String(input.linked_capa_id):null,input.evidence_ids_json?String(input.evidence_ids_json):null,actor!.id).run();await audit(env,actor!,id,'CREATE_RECALL_CASE','RECALL',rid,undefined,'OPEN');return json({data:{id:rid,status:'OPEN'}},201);}
+    if(url.pathname==='/recalls'&&request.method==='POST'){const actor=await authenticatedActor(request,env);const auth=protectedRoute(actor,id);if(auth)return auth;if(!requireRole(actor!,['QA','RA']))return json({error:{code:'FORBIDDEN',message:'QA/RA role required'},requestId:id},403);const input=await body<Record<string,unknown>>(request);if(!input?.product_id||!input?.reason)return json({error:{code:'VALIDATION_ERROR',message:'product_id and reason are required'},requestId:id},400);const rid=crypto.randomUUID();await env.DB.prepare('INSERT INTO recall_cases (id,product_id,reason,linked_nonconformity_id,linked_capa_id,evidence_ids_json,created_by) VALUES (?,?,?,?,?,?,?)').bind(rid,String(input.product_id),String(input.reason),input.linked_nonconformity_id?String(input.linked_nonconformity_id):null,input.linked_capa_id?String(input.linked_capa_id):null,input.evidence_ids_json?String(input.evidence_ids_json):null,actor!.id).run();await audit(env,actor!,id,'CREATE_RECALL_CASE','RECALL',rid,undefined,'OPEN');return json({data:{id:rid,status:'OPEN'}},201);}
     const recallMatch=url.pathname.match(/^\/recalls\/([^/]+)$/);if(recallMatch&&request.method==='GET'){const rc=await env.DB.prepare('SELECT * FROM recall_cases WHERE id=?').bind(recallMatch[1]).first();if(!rc)return json({error:{code:'NOT_FOUND',message:'Recall case not found'},requestId:id},404);const lots=await env.DB.prepare('SELECT * FROM recall_affected_lots WHERE recall_id=?').bind(recallMatch[1]).all();return json({data:{...rc,affectedLots:lots.results}});}
-    const recallLot=url.pathname.match(/^\/recalls\/([^/]+)\/lots$/);if(recallLot&&request.method==='POST'){const actor=await authenticatedActor(request,env);const auth=protectedRoute(actor,id);if(auth)return auth;if(!requireRole(actor,['QA','RA']))return json({error:{code:'FORBIDDEN',message:'QA/RA role required'},requestId:id},403);const input=await body<{batch_lot?:string}>(request);if(!input?.batch_lot)return json({error:{code:'VALIDATION_ERROR',message:'batch_lot is required'},requestId:id},400);const rc=await env.DB.prepare('SELECT id FROM recall_cases WHERE id=?').bind(recallLot[1]).first();if(!rc)return json({error:{code:'NOT_FOUND',message:'Recall case not found'},requestId:id},404);const lid=crypto.randomUUID();await env.DB.prepare('INSERT INTO recall_affected_lots (id,recall_id,batch_lot) VALUES (?,?,?)').bind(lid,recallLot[1],input.batch_lot).run();return json({data:{id:lid}},201);}
-    const recallStatus=url.pathname.match(/^\/recalls\/([^/]+)\/status$/);if(recallStatus&&request.method==='POST'){const actor=await authenticatedActor(request,env);const auth=protectedRoute(actor,id);if(auth)return auth;if(!requireRole(actor,['QA','RA']))return json({error:{code:'FORBIDDEN',message:'QA/RA role required'},requestId:id},403);const input=await body<{status?:string}>(request);const status=String(input?.status||'').toUpperCase();if(!['OPEN','ASSESSMENT','ACTION','VERIFICATION','CLOSED'].includes(status))return json({error:{code:'VALIDATION_ERROR',message:'Unsupported recall status'},requestId:id},400);const cur=await env.DB.prepare('SELECT status FROM recall_cases WHERE id=?').bind(recallStatus[1]).first<{status:string}>();if(!cur)return json({error:{code:'NOT_FOUND',message:'Recall case not found'},requestId:id},404);if(status==='CLOSED'){const rc=await env.DB.prepare('SELECT evidence_ids_json FROM recall_cases WHERE id=?').bind(recallStatus[1]).first<{evidence_ids_json:string|null}>();if(!rc?.evidence_ids_json)return json({error:{code:'CLOSURE_GATE',message:'Recall closure requires evidence trail'},requestId:id},409);}await env.DB.prepare('UPDATE recall_cases SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').bind(status,recallStatus[1]).run();await audit(env,actor!,id,'UPDATE_RECALL_STATUS','RECALL',recallStatus[1],cur.status,status);return json({data:{id:recallStatus[1],status}});}
+    const recallLot=url.pathname.match(/^\/recalls\/([^/]+)\/lots$/);if(recallLot&&request.method==='POST'){const actor=await authenticatedActor(request,env);const auth=protectedRoute(actor,id);if(auth)return auth;if(!requireRole(actor!,['QA','RA']))return json({error:{code:'FORBIDDEN',message:'QA/RA role required'},requestId:id},403);const input=await body<{batch_lot?:string}>(request);if(!input?.batch_lot)return json({error:{code:'VALIDATION_ERROR',message:'batch_lot is required'},requestId:id},400);const rc=await env.DB.prepare('SELECT id FROM recall_cases WHERE id=?').bind(recallLot[1]).first();if(!rc)return json({error:{code:'NOT_FOUND',message:'Recall case not found'},requestId:id},404);const lid=crypto.randomUUID();await env.DB.prepare('INSERT INTO recall_affected_lots (id,recall_id,batch_lot) VALUES (?,?,?)').bind(lid,recallLot[1],input.batch_lot).run();return json({data:{id:lid}},201);}
+    const recallStatus=url.pathname.match(/^\/recalls\/([^/]+)\/status$/);if(recallStatus&&request.method==='POST'){const actor=await authenticatedActor(request,env);const auth=protectedRoute(actor,id);if(auth)return auth;if(!requireRole(actor!,['QA','RA']))return json({error:{code:'FORBIDDEN',message:'QA/RA role required'},requestId:id},403);const input=await body<{status?:string}>(request);const status=String(input?.status||'').toUpperCase();if(!['OPEN','ASSESSMENT','ACTION','VERIFICATION','CLOSED'].includes(status))return json({error:{code:'VALIDATION_ERROR',message:'Unsupported recall status'},requestId:id},400);const cur=await env.DB.prepare('SELECT status FROM recall_cases WHERE id=?').bind(recallStatus[1]).first<{status:string}>();if(!cur)return json({error:{code:'NOT_FOUND',message:'Recall case not found'},requestId:id},404);if(status==='CLOSED'){const rc=await env.DB.prepare('SELECT evidence_ids_json FROM recall_cases WHERE id=?').bind(recallStatus[1]).first<{evidence_ids_json:string|null}>();if(!rc?.evidence_ids_json)return json({error:{code:'CLOSURE_GATE',message:'Recall closure requires evidence trail'},requestId:id},409);}await env.DB.prepare('UPDATE recall_cases SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').bind(status,recallStatus[1]).run();await audit(env,actor!,id,'UPDATE_RECALL_STATUS','RECALL',recallStatus[1],cur.status,status);return json({data:{id:recallStatus[1],status}});}
 
     if (request.method === 'GET' && url.pathname === '/documents') {
       const type = url.searchParams.get('type');
@@ -881,7 +881,7 @@ export default {
     const formulaValidateRoute = url.pathname.match(/^\/products\/([a-f0-9-]+)\/formulas\/validate$/);
     if (request.method === 'POST' && formulaValidateRoute) {
       if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
-      if (!requireRole(actor, ['RA', 'R&D', 'QA'])) return json({ error: { code: 'FORBIDDEN', message: 'RA, R&D or QA role required' }, requestId: id }, 403);
+      if (!requireRole(actor!, ['RA', 'R&D', 'QA'])) return json({ error: { code: 'FORBIDDEN', message: 'RA, R&D or QA role required' }, requestId: id }, 403);
       const productId = formulaValidateRoute[1];
       const product = await env.DB.prepare('SELECT id FROM products WHERE id = ?').bind(productId).first<{ id: string }>();
       if (!product) return json({ error: { code: 'NOT_FOUND', message: 'Product not found' }, requestId: id }, 404);
@@ -908,7 +908,7 @@ export default {
     const formulaPatchRoute = url.pathname.match(/^\/products\/([a-f0-9-]+)\/formulas\/([a-f0-9-]+)$/);
     if (request.method === 'PATCH' && formulaPatchRoute) {
       if (!actor) return json({ error: { code: 'UNAUTHENTICATED', message: 'Login required' }, requestId: id }, 401);
-      if (!requireRole(actor, ['RA', 'R&D', 'QA'])) return json({ error: { code: 'FORBIDDEN', message: 'RA, R&D or QA role required' }, requestId: id }, 403);
+      if (!requireRole(actor!, ['RA', 'R&D', 'QA'])) return json({ error: { code: 'FORBIDDEN', message: 'RA, R&D or QA role required' }, requestId: id }, 403);
       const productId = formulaPatchRoute[1], formulaId = formulaPatchRoute[2];
       const product = await env.DB.prepare('SELECT id FROM products WHERE id = ?').bind(productId).first<{ id: string }>();
       if (!product) return json({ error: { code: 'NOT_FOUND', message: 'Product not found' }, requestId: id }, 404);
