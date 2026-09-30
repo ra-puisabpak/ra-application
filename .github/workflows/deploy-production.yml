@@ -30,6 +30,9 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Generate Cloudflare runtime types
+        run: npm run generate-types
+
       - name: Typecheck
         run: npm run typecheck
 
