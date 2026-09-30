@@ -268,7 +268,7 @@ export default {
       const evidenceStates = await env.DB.prepare('SELECT verification_status AS status, COUNT(*) AS count FROM evidence GROUP BY verification_status ORDER BY verification_status').all();
       const pendingApprovals = await env.DB.prepare("SELECT COUNT(*) AS count FROM approval_steps WHERE status = 'PENDING' AND required_role IN (SELECT role FROM user_roles WHERE user_id = ? AND can_approve = 1)").bind(effectiveActor.id).first<{ count: number }>();
       const [documents, productSummary, production, qc, capa, training, traceability, recalls] = await Promise.all([
-        env.DB.prepare("SELECT COUNT(*) AS total, SUM(CASE WHEN state = 'CONTROLLED' THEN 1 ELSE 0 END) AS controlled, SUM(CASE WHEN state = 'PENDING_APPROVAL' THEN 1 ELSE 0 END) AS pendingApproval FROM documents").first(),
+        env.DB.prepare("SELECT COUNT(*) AS total, SUM(CASE WHEN status = 'CONTROLLED' THEN 1 ELSE 0 END) AS controlled FROM documents").first(),
         env.DB.prepare("SELECT COUNT(*) AS total, SUM(CASE WHEN state = 'EFFECTIVE' THEN 1 ELSE 0 END) AS effective FROM products").first(),
         env.DB.prepare("SELECT COUNT(*) AS total, SUM(CASE WHEN status IN ('OPEN','IN_PROCESS','QC_PENDING','HOLD','READY_FOR_RELEASE') THEN 1 ELSE 0 END) AS openCount, SUM(CASE WHEN status = 'RELEASED' THEN 1 ELSE 0 END) AS released FROM production_batches").first(),
         env.DB.prepare("SELECT COUNT(*) AS total, SUM(CASE WHEN result_status = 'PENDING' THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN result_status = 'FAIL' THEN 1 ELSE 0 END) AS failed FROM qc_checks").first(),
@@ -282,7 +282,7 @@ export default {
         myTasks: taskStates.results,
         evidence: evidenceStates.results,
         pendingApprovals: Number(pendingApprovals?.count ?? 0),
-        documents: { total: Number((documents as any)?.total ?? 0), controlled: Number((documents as any)?.controlled ?? 0), pendingApproval: Number((documents as any)?.pendingApproval ?? 0) },
+        documents: { total: Number((documents as any)?.total ?? 0), controlled: Number((documents as any)?.controlled ?? 0), pendingApproval: Number((await env.DB.prepare("SELECT COUNT(*) AS count FROM document_revisions WHERE status = 'PENDING_APPROVAL'").first<{count:number}>())?.count ?? 0) },
         productSummary: { total: Number((productSummary as any)?.total ?? 0), effective: Number((productSummary as any)?.effective ?? 0) },
         production: { total: Number((production as any)?.total ?? 0), open: Number((production as any)?.openCount ?? 0), released: Number((production as any)?.released ?? 0) },
         qc: { total: Number((qc as any)?.total ?? 0), pending: Number((qc as any)?.pending ?? 0), failed: Number((qc as any)?.failed ?? 0) },
