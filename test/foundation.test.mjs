@@ -52,9 +52,20 @@ test('product submission is blocked until its current revision has verified evid
   assert.equal((await response.json()).error.code, 'VERIFIED_EVIDENCE_REQUIRED');
 });
 
-test('protected endpoints reject an unknown Cloudflare Access identity', async () => {
-  const response = await worker.fetch(new Request('https://ra.example/products', { headers: { 'cf-access-authenticated-user-email': 'unknown@example.com' } }), { DB: database(), EVIDENCE: {} }, context);
-  assert.equal(response.status, 401);
+test('preview mode allows an unknown Cloudflare Access identity to read the product list only', async () => {
+  const headers = { 'cf-access-authenticated-user-email': 'unknown@example.com' };
+  const response = await worker.fetch(new Request('https://ra.example/products', { headers }), { DB: database(), EVIDENCE: {} }, context);
+  assert.equal(response.status, 200);
+  const write = await worker.fetch(new Request('https://ra.example/products', { method: 'POST', headers }), { DB: database(), EVIDENCE: {} }, context);
+  assert.equal(write.status, 401);
+});
+
+test('controlled records reject an unknown Cloudflare Access identity', async () => {
+  const headers = { 'cf-access-authenticated-user-email': 'unknown@example.com' };
+  for (const path of ['/audit', '/products/abc-1/formulas', '/products/abc-1/formulas/def-2', '/ra/raw-materials', '/ra/suppliers', '/ra/suppliers/s1/events', '/recalls', '/recalls/r1', '/traceability/events']) {
+    const response = await worker.fetch(new Request(`https://ra.example${path}`, { headers }), { DB: database(), EVIDENCE: {} }, context);
+    assert.equal(response.status, 401, path);
+  }
 });
 
 test('product list resolves authorization and data from D1', async () => {

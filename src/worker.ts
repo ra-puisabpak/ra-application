@@ -101,7 +101,16 @@ const isApiRoute = (pathname: string): boolean => [
   '/dashboard',
 ].some((prefix) => pathname === prefix || pathname.startsWith(prefix));
 
-const productFromRow = (row: Record<string, unknown>): Product => ({
+// Controlled records that stay closed in read-only preview mode.
+const isSensitiveReadRoute = (pathname: string): boolean =>
+  pathname === '/audit'
+  || /^\/products\/[^/]+\/formulas(\/|$)/.test(pathname)
+  || pathname === '/ra/raw-materials'
+  || pathname === '/ra/suppliers' || pathname.startsWith('/ra/suppliers/')
+  || pathname === '/recalls' || pathname.startsWith('/recalls/')
+  || pathname.startsWith('/traceability/');
+
+const productFromRow =(row: Record<string, unknown>): Product => ({
   id: String(row.id), productCode: String(row.product_code), thaiName: String(row.thai_name),
   englishName: row.english_name === null ? null : String(row.english_name), siteId: String(row.site_id),
   revision: String(row.revision), state: String(row.state), version: Number(row.version),
@@ -231,6 +240,10 @@ export default {
 
     if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(request.method) && !actor) {
       return json({ error: { code: 'UNAUTHENTICATED', message: 'Login is required for write actions in preview mode' }, requestId: id }, 401);
+    }
+
+    if (isSensitiveReadRoute(url.pathname) && !actor) {
+      return json({ error: { code: 'UNAUTHENTICATED', message: 'Login is required to view controlled records' }, requestId: id }, 401);
     }
 
     if (request.method === 'GET' && url.pathname === '/tasks') {
