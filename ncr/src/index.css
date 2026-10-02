@@ -1,0 +1,130 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  font-family: 'Sarabun', sans-serif;
+}
+
+/* ===== A4 Print Styles ===== */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 8mm 10mm;
+  }
+
+  html, body {
+    width: 210mm;
+    height: 297mm;
+    margin: 0;
+    padding: 0;
+    background: white !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-area {
+    display: block !important;
+  }
+
+  .page-break {
+    page-break-before: always;
+  }
+
+  .avoid-break {
+    page-break-inside: avoid;
+  }
+}
+
+/* A4 preview on screen */
+.a4-page {
+  width: 210mm;
+  min-height: 297mm;
+  background: white;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+  margin: 0 auto;
+  padding: 10mm 12mm;
+  box-sizing: border-box;
+}
+
+@media screen {
+  .a4-page {
+    margin: 20px auto;
+  }
+}
+
+/* NCR form table styling */
+.ncr-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 9pt;
+}
+
+.ncr-table td, .ncr-table th {
+  border: 1px solid #333;
+  padding: 3px 5px;
+  vertical-align: top;
+}
+
+.ncr-table th {
+  background-color: #1a365d;
+  color: white;
+  text-align: center;
+  font-weight: 600;
+  font-size: 8.5pt;
+}
+
+.section-header {
+  background-color: #2b4c7e;
+  color: white;
+  font-weight: 600;
+  font-size: 9pt;
+  padding: 4px 6px;
+  text-align: left;
+}
+
+.label-cell {
+  background-color: #eef2f7;
+  font-weight: 500;
+  white-space: nowrap;
+  width: 1%;
+  font-size: 8.5pt;
+  color: #333;
+}
+
+.value-cell {
+  font-size: 9pt;
+  color: #111;
+  min-height: 20px;
+}
+
+.text-block {
+  min-height: 35px;
+  font-size: 9pt;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.signature-line {
+  border-top: 1px solid #333;
+  margin-top: 20px;
+  padding-top: 2px;
+  text-align: center;
+  font-size: 8pt;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 8pt;
+  font-weight: 600;
+}
+
+.status-open { background: #fed7d7; color: #c53030; }
+.status-inprogress { background: #feebc8; color: #c05621; }
+.status-closed { background: #c6f6d5; color: #276749; }
+.status-verified { background: #bee3f8; color: #2b6cb0; }

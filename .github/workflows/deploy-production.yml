@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+    # The NCR eForm in ncr/ has its own deploy workflows; changes there do not redeploy the RA application.
+    paths-ignore:
+      - 'ncr/**'
+      - '.github/workflows/ncr-deploy-*.yml'
   workflow_dispatch:
 
 concurrency:

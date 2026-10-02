@@ -1,0 +1,58 @@
+name: Deploy NCR eForm (Pages)
+
+# Builds and deploys only the NCR/CAPA eForm screens in ncr/. The RA application is not touched.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'ncr/src/**'
+      - 'ncr/public/**'
+      - 'ncr/index.html'
+      - 'ncr/package.json'
+      - 'ncr/package-lock.json'
+      - 'ncr/vite.config.*'
+      - 'ncr/tailwind.config.*'
+      - 'ncr/postcss.config.*'
+      - '.github/workflows/ncr-deploy-pages.yml'
+
+concurrency:
+  group: ncr-pages-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    name: Build and deploy to Cloudflare Pages
+    defaults:
+      run:
+        working-directory: ncr
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ncr/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          # Address of the API Worker. Change if the Worker is deployed under another name.
+          VITE_API_URL: https://puisabpak-ncr-api.swifoods.workers.dev
+
+      - name: Create Pages project (first time only)
+        run: npx wrangler@3 pages project create puisabpak-ncr --production-branch main || true
+
+      - name: Deploy to Cloudflare Pages
+        run: npx wrangler@3 pages deploy dist --project-name puisabpak-ncr --branch main

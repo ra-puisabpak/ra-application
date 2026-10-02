@@ -1,0 +1,43 @@
+name: Deploy NCR eForm API (Worker)
+
+# Deploys only the NCR/CAPA eForm backend in ncr/worker. The RA application is not touched.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'ncr/worker/**'
+      - '.github/workflows/ncr-deploy-worker.yml'
+
+concurrency:
+  group: ncr-worker-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    name: Test and deploy to Cloudflare Workers
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run API tests
+        working-directory: ncr/worker
+        run: node --no-warnings test.mjs
+
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: ncr/worker
+          secrets: |
+            SETUP_KEY
+        env:
+          SETUP_KEY: ${{ secrets.SETUP_KEY }}
