@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "npm run generate-types",
     "typecheck": "npm run generate-types && tsc --noEmit",
     "test": "npm run generate-types && rm -rf .test-build && tsc --outDir .test-build --noEmit false && node --test test/**/*.test.mjs",
     "dev": "wrangler dev",
