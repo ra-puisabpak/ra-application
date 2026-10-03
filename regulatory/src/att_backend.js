@@ -14,6 +14,15 @@ function sniffImage(b) {
   return null;
 }
 
+/** Small JPEG preview made by the browser. Optional: anything invalid is simply dropped. */
+function cleanThumb(value) {
+  const data = typeof value === 'string' ? value.replace(/\s+/g, '') : '';
+  if (!data || data.length > 80000) return null;
+  let bin;
+  try { bin = atob(data); } catch { return null; }
+  return bin.charCodeAt(0) === 0xff && bin.charCodeAt(1) === 0xd8 && bin.charCodeAt(2) === 0xff ? data : null;
+}
+
 async function attRecordExists(env, collection, id) {
   if (collection === 'rawMaterials') return !!(await env.DB.prepare('SELECT 1 FROM ra_raw_material_master WHERE material_code = ?').bind(id).first());
   if (collection === 'kpiResults') return !!(await env.DB.prepare('SELECT 1 FROM reg_kpi_results WHERE id = ?').bind(id).first());
@@ -22,10 +31,16 @@ async function attRecordExists(env, collection, id) {
 
 async function handleAttachments(request, env, user, url, path, method) {
   if (method === 'GET' && path === '/api/attachments/counts') {
-    const rows = await env.DB.prepare('SELECT collection, record_id, COUNT(*) AS n FROM reg_attachments WHERE voided_at IS NULL GROUP BY collection, record_id').all();
-    const counts = {};
-    for (const r of rows.results) counts[`${r.collection}|${r.record_id}`] = r.n;
-    return json({ counts });
+    // ids per record (oldest first) so every screen can show thumbnails without one request per record
+    const rows = await env.DB.prepare('SELECT id, collection, record_id, thumb IS NULL AS no_thumb FROM reg_attachments WHERE voided_at IS NULL ORDER BY id').all();
+    const counts = {}, ids = {}, needThumb = [];
+    for (const r of rows.results) {
+      const key = `${r.collection}|${r.record_id}`;
+      counts[key] = (counts[key] || 0) + 1;
+      (ids[key] = ids[key] || []).push(r.id);
+      if (r.no_thumb) needThumb.push(r.id);
+    }
+    return json({ counts, ids, needThumb });
   }
 
   if (method === 'GET' && path === '/api/attachments') {
@@ -39,9 +54,12 @@ async function handleAttachments(request, env, user, url, path, method) {
     return json({ rows: rows.results, max: ATT_MAX_PER_RECORD });
   }
 
-  const fileMatch = path.match(/^\/api\/attachments\/(\d+)\/file$/);
+  const fileMatch = path.match(/^\/api\/attachments\/(\d+)\/(file|thumb)$/);
   if (method === 'GET' && fileMatch) {
-    const row = await env.DB.prepare('SELECT mime, data, file_name FROM reg_attachments WHERE id = ?').bind(Number(fileMatch[1])).first();
+    // "thumb" is the small preview used in lists; photos stored before previews existed fall back to the full image
+    const row = fileMatch[2] === 'thumb'
+      ? await env.DB.prepare("SELECT CASE WHEN thumb IS NULL THEN mime ELSE 'image/jpeg' END AS mime, COALESCE(thumb, data) AS data FROM reg_attachments WHERE id = ?").bind(Number(fileMatch[1])).first()
+      : await env.DB.prepare('SELECT mime, data FROM reg_attachments WHERE id = ?').bind(Number(fileMatch[1])).first();
     if (!row) fail(404, 'NOT_FOUND', 'ไม่พบรูปนี้');
     const bin = atob(row.data);
     const bytes = new Uint8Array(bin.length);
@@ -49,7 +67,8 @@ async function handleAttachments(request, env, user, url, path, method) {
     return new Response(bytes, { headers: {
       'content-type': row.mime,
       'content-disposition': `inline; filename="attachment-${fileMatch[1]}.${row.mime.split('/')[1]}"`,
-      'cache-control': 'private, max-age=86400', // an attachment never changes once stored
+      // the full image never changes; a preview can be added later, so it is cached for a shorter time
+      'cache-control': fileMatch[2] === 'thumb' ? 'private, max-age=600' : 'private, max-age=86400',
       'x-content-type-options': 'nosniff',
     } });
   }
@@ -81,13 +100,24 @@ async function handleAttachments(request, env, user, url, path, method) {
     if (active.results.some((a) => a.sha256 === sha256)) fail(409, 'DUPLICATE', 'รูปนี้แนบไว้กับรายการนี้แล้ว');
     if (active.results.length >= ATT_MAX_PER_RECORD) fail(409, 'LIMIT', `แนบได้สูงสุด ${ATT_MAX_PER_RECORD} รูปต่อรายการ`);
 
+    const thumb = cleanThumb(input.thumbBase64);
     const fileName = (str(input.fileName) || 'photo').replace(/[^\w.\-ก-๙ ]/g, '_').slice(0, 100);
     const caption = str(input.caption).slice(0, 200);
     const inserted = await env.DB.prepare(
-      'INSERT INTO reg_attachments (collection, record_id, file_name, mime, size, sha256, caption, data, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
-    ).bind(collection, recordId, fileName, mime, bytes.length, sha256, caption, data, user.id).first();
+      'INSERT INTO reg_attachments (collection, record_id, file_name, mime, size, sha256, caption, data, thumb, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+    ).bind(collection, recordId, fileName, mime, bytes.length, sha256, caption, data, thumb, user.id).first();
     await audit(env, user, 'ATTACH', collection, recordId, null, { attachment: inserted.id, fileName, size: bytes.length, sha256, caption }).run();
     return json({ ok: true, id: inserted.id }, 201);
+  }
+
+  // add the small preview to a photo that was stored without one (allowed once; enforced by a D1 trigger too)
+  const thumbMatch = path.match(/^\/api\/attachments\/(\d+)\/thumb$/);
+  if (method === 'POST' && thumbMatch) {
+    const input = await readJson(request);
+    const thumb = cleanThumb(input.thumbBase64);
+    if (!thumb) fail(400, 'BAD_FILE', 'ภาพย่อไม่ถูกต้อง');
+    const res = await env.DB.prepare('UPDATE reg_attachments SET thumb = ? WHERE id = ? AND thumb IS NULL AND voided_at IS NULL').bind(thumb, Number(thumbMatch[1])).run();
+    return json({ ok: true, changed: res.meta.changes });
   }
 
   const voidMatch = path.match(/^\/api\/attachments\/(\d+)\/void$/);

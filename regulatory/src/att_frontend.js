@@ -1,7 +1,30 @@
 /* -------------------------------------------------------------- รูปแนบ (image attachments) */
-let ATT = {}, _att = null;
+let ATT = {}, ATT_IDS = {}, _att = null;
 const ATT_TITLE = { regProducts:'ผลิตภัณฑ์', formulaControl:'สูตร', labelChecklist:'ฉลาก', rawMaterials:'วัตถุดิบ', kpiResults:'ผล KPI' };
-async function loadAttCounts(){ try { ATT = (await api('GET','/api/attachments/counts')).counts || {}; } catch { /* photos are optional: the rest of the app still works */ } }
+async function loadAttCounts(){
+  try {
+    const r = await api('GET','/api/attachments/counts'); ATT = r.counts || {}; ATT_IDS = r.ids || {};
+    if (r.needThumb && r.needThumb.length && kpiCanRecord()) attBackfillThumbs(r.needThumb.slice(0, 8));
+  } catch { /* photos are optional: the rest of the app still works */ }
+}
+/* thumbnails shown directly on cards and rows: tap one to see it full size, "+n" opens the full list */
+function attStrip(collection, id, size, max){
+  const ids = ATT_IDS[collection + '|' + id] || []; if (!ids.length) return '';
+  const show = ids.length > max ? ids.slice(0, max - 1) : ids, more = ids.length - show.length;
+  const box = `flex:0 0 auto;width:${size}px;height:${size}px;border-radius:8px;border:1px solid #e2e8f0;overflow:hidden;padding:0;background:#f1f5f9`;
+  return `<div style="display:flex;flex-wrap:wrap;gap:6px;flex-basis:100%">${show.map(a =>
+    `<button type="button" style="${box}" onclick="event.stopPropagation();viewAttachment(${a},'${collection}','${esc(id)}')" aria-label="ดูรูปแนบ"><img src="/api/attachments/${a}/thumb" alt="" loading="lazy" style="display:block;width:100%;height:100%;object-fit:cover"></button>`).join('')}${more ?
+    `<button type="button" style="${box};font-size:13px;font-weight:700;color:#475569" onclick="event.stopPropagation();openAttachments('${collection}','${esc(id)}')" aria-label="ดูรูปทั้งหมด ${ids.length} รูป">+${more}</button>` : ''}</div>`;
+}
+/* photos stored before previews existed: make the preview once, in the background */
+async function attBackfillThumbs(ids){
+  for (const id of ids) {
+    try {
+      const blob = await (await fetch(`/api/attachments/${id}/file`, { credentials:'same-origin' })).blob();
+      await api('POST', `/api/attachments/${id}/thumb`, { thumbBase64: await attBase64(await attThumb(blob)) });
+    } catch { /* try again next time */ }
+  }
+}
 function attBtn(collection, id, cls){
   const n = ATT[collection + '|' + id] || 0;
   return `<button class="${cls}" onclick="openAttachments('${collection}','${esc(id)}')">📎 รูป${n ? ' (' + n + ')' : ''}</button>`;
@@ -27,8 +50,8 @@ async function openAttachments(collection, id){
           </div>` : ''}
           ${live.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px">
             ${live.map(a => `<figure style="margin:0;min-width:0">
-              <button type="button" onclick="viewAttachment(${a.id})" style="display:block;width:100%;padding:0;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;background:#f8fafc" aria-label="ดูรูปขนาดเต็ม">
-                <img src="${src(a)}" alt="${esc(a.caption || a.file_name)}" loading="lazy" style="display:block;width:100%;height:130px;object-fit:cover"></button>
+              <button type="button" onclick="viewAttachment(${a.id},'${collection}','${esc(id)}')" style="display:block;width:100%;padding:0;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;background:#f8fafc" aria-label="ดูรูปขนาดเต็ม">
+                <img src="/api/attachments/${a.id}/thumb" alt="${esc(a.caption || a.file_name)}" loading="lazy" style="display:block;width:100%;height:130px;object-fit:cover"></button>
               <figcaption class="text-[12px] mt-1" style="overflow-wrap:anywhere">${a.caption ? `<div class="font-semibold">${esc(a.caption)}</div>` : ''}
                 <div class="text-ink-mute">${esc(a.created_by_name || '-')} · ${fmtDate(a.created_at)} · ${kb(a)}</div>
                 ${a.created_by === ME.id || ME.canApprove ? `<button class="text-brand text-xs font-semibold" onclick="voidAttachment(${a.id})">ยกเลิกรูปนี้</button>` : ''}</figcaption>
@@ -43,32 +66,48 @@ function closeAttachments(){
   if (a && a.collection === 'kpiResults' && _kpiKey && currentPage === 'kpi') { renderKpi().then(() => openKpi(_kpiKey)); return; }
   if (PAGES[currentPage] && currentPage !== 'auditLog' && currentPage !== 'users') PAGES[currentPage].render();
 }
-function viewAttachment(id){
+function viewAttachment(id, collection, recordId){
+  const ids = (collection && ATT_IDS[collection + '|' + recordId]) || [];
+  let i = Math.max(0, ids.indexOf(id));
   const d = document.createElement('div');
-  d.style.cssText = 'position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center;overflow:auto;padding:8px';
-  d.setAttribute('role','dialog'); d.setAttribute('aria-label','รูปขนาดเต็ม แตะเพื่อปิด');
-  d.innerHTML = `<img src="/api/attachments/${id}/file" alt="" style="max-width:100%;max-height:100%;object-fit:contain">`;
-  d.onclick = () => d.remove();
-  document.body.appendChild(d);
+  d.style.cssText = 'position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center;overflow:hidden;padding:8px';
+  d.setAttribute('role','dialog'); d.setAttribute('aria-label','รูปขนาดเต็ม');
+  const nav = 'position:absolute;top:50%;transform:translateY(-50%);width:44px;height:64px;border:0;border-radius:10px;background:rgba(255,255,255,.18);color:#fff;font-size:28px';
+  const draw = () => {
+    const cur = ids.length ? ids[i] : id;
+    d.innerHTML = `<img src="/api/attachments/${cur}/file" alt="" style="max-width:100%;max-height:100%;object-fit:contain">
+      <button type="button" data-x aria-label="ปิด" style="position:absolute;top:10px;right:10px;width:44px;height:44px;border:0;border-radius:999px;background:rgba(255,255,255,.18);color:#fff;font-size:24px">&times;</button>
+      ${ids.length > 1 ? `<button type="button" data-p aria-label="รูปก่อนหน้า" style="${nav};left:8px">&#8249;</button><button type="button" data-n aria-label="รูปถัดไป" style="${nav};right:8px">&#8250;</button>
+      <div style="position:absolute;bottom:12px;left:0;right:0;text-align:center;color:#fff;font-size:13px">${i + 1} / ${ids.length}</div>` : ''}`;
+  };
+  d.onclick = e => {
+    if (e.target.hasAttribute('data-p')) { i = (i - 1 + ids.length) % ids.length; draw(); }
+    else if (e.target.hasAttribute('data-n')) { i = (i + 1) % ids.length; draw(); }
+    else d.remove();
+  };
+  draw(); document.body.appendChild(d);
 }
-/* shrink a photo in the browser: long side <= 1600 px, JPEG, <= 700 KB */
-async function attShrink(file){
+/* resize a photo in the browser to JPEG: tries each [long side px, quality] until it fits the byte limit */
+async function attResize(file, steps, limit){
+  const name = file.name || 'รูป';
   let img, w, h;
   try { img = await createImageBitmap(file, { imageOrientation:'from-image' }); w = img.width; h = img.height; }
   catch {
-    img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('เปิดไฟล์รูป "' + file.name + '" ไม่ได้')); i.src = URL.createObjectURL(file); });
+    img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('เปิดไฟล์รูป "' + name + '" ไม่ได้')); i.src = URL.createObjectURL(file); });
     w = img.naturalWidth; h = img.naturalHeight;
   }
-  if (!w || !h) throw new Error('เปิดไฟล์รูป "' + file.name + '" ไม่ได้');
-  for (const [max, q] of [[1600,.8],[1600,.65],[1280,.6],[1024,.55],[800,.5]]) {
+  if (!w || !h) throw new Error('เปิดไฟล์รูป "' + name + '" ไม่ได้');
+  for (const [max, q] of steps) {
     const s = Math.min(1, max / Math.max(w, h)), c = document.createElement('canvas');
     c.width = Math.max(1, Math.round(w * s)); c.height = Math.max(1, Math.round(h * s));
     const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(img, 0, 0, c.width, c.height);
     const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', q));
-    if (blob && blob.size <= 700000) return blob;
+    if (blob && blob.size <= limit) return blob;
   }
-  throw new Error('ย่อรูป "' + file.name + '" ไม่สำเร็จ');
+  throw new Error('ย่อรูป "' + name + '" ไม่สำเร็จ');
 }
+const attShrink = file => attResize(file, [[1600,.8],[1600,.65],[1280,.6],[1024,.55],[800,.5]], 700000); // stored photo
+const attThumb = file => attResize(file, [[360,.7],[320,.55],[240,.5]], 55000);                           // preview for lists
 const attBase64 = blob => new Promise((res, rej) => { const f = new FileReader(); f.onload = () => res(String(f.result).split(',')[1]); f.onerror = () => rej(new Error('อ่านไฟล์ไม่ได้')); f.readAsDataURL(blob); });
 async function uploadAttachments(){
   const files = [...document.getElementById('attFile').files], msg = document.getElementById('attMsg'), btn = document.getElementById('attSave');
@@ -80,7 +119,8 @@ async function uploadAttachments(){
     try {
       if (!/^image\//.test(files[i].type || 'image/')) throw new Error('"' + files[i].name + '" ไม่ใช่ไฟล์รูป');
       const blob = await attShrink(files[i]);
-      await api('POST','/api/attachments',{ collection:a.collection, recordId:a.id, fileName:files[i].name, caption, dataBase64: await attBase64(blob) });
+      let thumbBase64 = ''; try { thumbBase64 = await attBase64(await attThumb(blob)); } catch { /* preview is optional */ }
+      await api('POST','/api/attachments',{ collection:a.collection, recordId:a.id, fileName:files[i].name, caption, dataBase64: await attBase64(blob), thumbBase64 });
       ok++;
     } catch (e) { toast(e.message,'error'); }
   }
