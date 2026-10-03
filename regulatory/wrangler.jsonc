@@ -1,0 +1,14 @@
+{
+  // Puisabpak Regulatory — the single-file Worker the RA team uses day to day.
+  // Deployed by .github/workflows/deploy-regulatory.yml on every push to the
+  // branch "deploy/puisabpak-regulatory" (no computer needed).
+  "name": "puisabpak-regulatory",
+  "account_id": "acd0ef2518aed1f77c126d0592469ae1",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "keep_vars": true,
+  "d1_databases": [
+    { "binding": "DB", "database_name": "ra-application", "database_id": "19d30663-7eab-4ba6-aacb-ec8013566665" }
+  ]
+}
