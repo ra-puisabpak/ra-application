@@ -40,7 +40,14 @@ async function handleAttachments(request, env, user, url, path, method) {
       (ids[key] = ids[key] || []).push(r.id);
       if (r.no_thumb) needThumb.push(r.id);
     }
-    return json({ counts, ids, needThumb });
+    // cover photo per record: the latest choice that still points at an active photo
+    const covers = {};
+    const coverRows = await env.DB.prepare(
+      `SELECT c.collection, c.record_id, c.attachment_id FROM reg_attachment_covers c
+       JOIN (SELECT collection, record_id, MAX(id) AS mid FROM reg_attachment_covers GROUP BY collection, record_id) m ON m.mid = c.id
+       JOIN reg_attachments a ON a.id = c.attachment_id AND a.voided_at IS NULL`).all();
+    for (const r of coverRows.results) covers[`${r.collection}|${r.record_id}`] = r.attachment_id;
+    return json({ counts, ids, needThumb, covers });
   }
 
   if (method === 'GET' && path === '/api/attachments') {
@@ -118,6 +125,20 @@ async function handleAttachments(request, env, user, url, path, method) {
     if (!thumb) fail(400, 'BAD_FILE', 'ภาพย่อไม่ถูกต้อง');
     const res = await env.DB.prepare('UPDATE reg_attachments SET thumb = ? WHERE id = ? AND thumb IS NULL AND voided_at IS NULL').bind(thumb, Number(thumbMatch[1])).run();
     return json({ ok: true, changed: res.meta.changes });
+  }
+
+  // choose which photo is shown first (e.g. the product picture on the product cards)
+  const coverMatch = path.match(/^\/api\/attachments\/(\d+)\/cover$/);
+  if (method === 'POST' && coverMatch) {
+    if (!user.roles.some((r) => r === 'RA' || r === 'R&D' || r === 'QA' || r === 'MANAGEMENT')) fail(403, 'FORBIDDEN', 'บัญชีนี้ไม่มีสิทธิ์ตั้งรูปปก');
+    const row = await env.DB.prepare('SELECT id, collection, record_id, file_name, voided_at FROM reg_attachments WHERE id = ?').bind(Number(coverMatch[1])).first();
+    if (!row) fail(404, 'NOT_FOUND', 'ไม่พบรูปนี้');
+    if (row.voided_at) fail(409, 'LOCKED', 'รูปนี้ถูกยกเลิกแล้ว ตั้งเป็นรูปปกไม่ได้');
+    await env.DB.batch([
+      env.DB.prepare('INSERT INTO reg_attachment_covers (collection, record_id, attachment_id, set_by) VALUES (?, ?, ?, ?)').bind(row.collection, row.record_id, row.id, user.id),
+      audit(env, user, 'SET_COVER', row.collection, row.record_id, null, { attachment: row.id, fileName: row.file_name }),
+    ]);
+    return json({ ok: true });
   }
 
   const voidMatch = path.match(/^\/api\/attachments\/(\d+)\/void$/);

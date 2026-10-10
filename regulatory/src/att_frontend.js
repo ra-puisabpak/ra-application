@@ -1,15 +1,18 @@
 /* -------------------------------------------------------------- รูปแนบ (image attachments) */
-let ATT = {}, ATT_IDS = {}, _att = null;
+let ATT = {}, ATT_IDS = {}, ATT_COVER = {}, _att = null;
+/* the photo shown first: the chosen cover, otherwise the oldest photo */
+function attCover(collection, id){ const ids = ATT_IDS[collection + '|' + id] || []; const c = ATT_COVER[collection + '|' + id]; return ids.includes(c) ? c : ids[0] || null; }
 const ATT_TITLE = { regProducts:'ผลิตภัณฑ์', formulaControl:'สูตร', labelChecklist:'ฉลาก', rawMaterials:'วัตถุดิบ', kpiResults:'ผล KPI' };
 async function loadAttCounts(){
   try {
-    const r = await api('GET','/api/attachments/counts'); ATT = r.counts || {}; ATT_IDS = r.ids || {};
+    const r = await api('GET','/api/attachments/counts'); ATT = r.counts || {}; ATT_IDS = r.ids || {}; ATT_COVER = r.covers || {};
     if (r.needThumb && r.needThumb.length && kpiCanRecord()) attBackfillThumbs(r.needThumb.slice(0, 8));
   } catch { /* photos are optional: the rest of the app still works */ }
 }
 /* thumbnails shown directly on cards and rows: tap one to see it full size, "+n" opens the full list */
 function attStrip(collection, id, size, max){
-  const ids = ATT_IDS[collection + '|' + id] || []; if (!ids.length) return '';
+  const all = ATT_IDS[collection + '|' + id] || []; if (!all.length) return '';
+  const cov = attCover(collection, id), ids = [cov, ...all.filter(x => x !== cov)];
   const show = ids.length > max ? ids.slice(0, max - 1) : ids, more = ids.length - show.length;
   const box = `flex:0 0 auto;width:${size}px;height:${size}px;border-radius:8px;border:1px solid #e2e8f0;overflow:hidden;padding:0;background:#f1f5f9`;
   return `<div style="display:flex;flex-wrap:wrap;gap:6px;flex-basis:100%">${show.map(a =>
@@ -29,8 +32,9 @@ function attBtn(collection, id, cls){
   const n = ATT[collection + '|' + id] || 0;
   return `<button class="${cls}" onclick="openAttachments('${collection}','${esc(id)}')">📎 รูป${n ? ' (' + n + ')' : ''}</button>`;
 }
-async function openAttachments(collection, id){
-  _att = { collection, id };
+async function openAttachments(collection, id, ret){
+  const keep = _att && _att.collection === collection && _att.id === id ? _att.ret : null;
+  _att = { collection, id, ret: ret || keep };
   let r;
   try { r = await api('GET', `/api/attachments?collection=${collection}&id=${encodeURIComponent(id)}`); }
   catch (e) { toast(e.message,'error'); return; }
@@ -54,7 +58,8 @@ async function openAttachments(collection, id){
                 <img src="/api/attachments/${a.id}/thumb" alt="${esc(a.caption || a.file_name)}" loading="lazy" style="display:block;width:100%;height:130px;object-fit:cover"></button>
               <figcaption class="text-[12px] mt-1" style="overflow-wrap:anywhere">${a.caption ? `<div class="font-semibold">${esc(a.caption)}</div>` : ''}
                 <div class="text-ink-mute">${esc(a.created_by_name || '-')} · ${fmtDate(a.created_at)} · ${kb(a)}</div>
-                ${a.created_by === ME.id || ME.canApprove ? `<button class="text-brand text-xs font-semibold" onclick="voidAttachment(${a.id})">ยกเลิกรูปนี้</button>` : ''}</figcaption>
+                <div class="flex flex-wrap gap-x-3">${attCover(collection, id) === a.id ? '<span class="pill ' + PILL.green + '">รูปปก</span>' : kpiCanRecord() ? `<button class="text-blue-700 text-xs font-semibold" onclick="setCover(${a.id})">ตั้งเป็นรูปปก</button>` : ''}
+                ${a.created_by === ME.id || ME.canApprove ? `<button class="text-brand text-xs font-semibold" onclick="voidAttachment(${a.id})">ยกเลิกรูปนี้</button>` : ''}</div></figcaption>
             </figure>`).join('')}</div>` : '<div class="text-sm text-ink-mute text-center py-4">ยังไม่มีรูปแนบ</div>'}
           ${dead.length ? `<details class="text-[12.5px]"><summary class="text-ink-mute" style="cursor:pointer">รูปที่ยกเลิกแล้ว (${dead.length})</summary>
             ${dead.map(a => `<div class="py-1 border-b border-slate-100"><button class="text-brand font-semibold" onclick="viewAttachment(${a.id})">${esc(a.caption || a.file_name)}</button> · ${esc(a.created_by_name || '-')} · ${fmtDate(a.created_at)}<div class="text-red-700">ยกเลิก: ${esc(a.void_reason)} (${esc(a.voided_by_name || '-')})</div></div>`).join('')}</details>` : ''}
@@ -63,6 +68,7 @@ async function openAttachments(collection, id){
 }
 function closeAttachments(){
   const a = _att; _att = null; closeModal();
+  if (a && a.ret === 'product') { if (currentPage === 'regProducts') renderProducts(); openProduct(a.id); return; }
   if (a && a.collection === 'kpiResults' && _kpiKey && currentPage === 'kpi') { renderKpi().then(() => openKpi(_kpiKey)); return; }
   if (PAGES[currentPage] && currentPage !== 'auditLog' && currentPage !== 'users') PAGES[currentPage].render();
 }
@@ -107,7 +113,7 @@ async function attResize(file, steps, limit){
   throw new Error('ย่อรูป "' + name + '" ไม่สำเร็จ');
 }
 const attShrink = file => attResize(file, [[1600,.8],[1600,.65],[1280,.6],[1024,.55],[800,.5]], 700000); // stored photo
-const attThumb = file => attResize(file, [[360,.7],[320,.55],[240,.5]], 55000);                           // preview for lists
+const attThumb = file => attResize(file, [[480,.72],[400,.6],[320,.55],[240,.5]], 58000);                           // preview for lists
 const attBase64 = blob => new Promise((res, rej) => { const f = new FileReader(); f.onload = () => res(String(f.result).split(',')[1]); f.onerror = () => rej(new Error('อ่านไฟล์ไม่ได้')); f.readAsDataURL(blob); });
 async function uploadAttachments(){
   const files = [...document.getElementById('attFile').files], msg = document.getElementById('attMsg'), btn = document.getElementById('attSave');
@@ -127,6 +133,10 @@ async function uploadAttachments(){
   if (ok) toast(`แนบรูปแล้ว ${ok} รูป ✓`);
   await loadAttCounts();
   if (_att === a) openAttachments(a.collection, a.id);
+}
+async function setCover(id){
+  try { await api('POST', `/api/attachments/${id}/cover`, {}); toast('ตั้งเป็นรูปปกแล้ว ✓'); await loadAttCounts(); if (_att) openAttachments(_att.collection, _att.id); }
+  catch (e) { toast(e.message,'error'); }
 }
 async function voidAttachment(id){
   const reason = prompt('ยกเลิกรูปนี้\nรูปจะยังอยู่ในประวัติ แต่ไม่แสดงเป็นรูปแนบปัจจุบัน\nกรุณาระบุเหตุผล'); if (!reason) return;
