@@ -6,7 +6,7 @@ This repository is prepared for a Cloudflare Workers + D1 + R2 deployment.
 
 Create:
 
-- Worker: `ra-application`
+- Worker: `puisabpak-regulatory`
 - D1 database: `ra-application`
 - R2 bucket: `ra-application-evidence`
 - Cloudflare Access application protecting the Worker hostname
