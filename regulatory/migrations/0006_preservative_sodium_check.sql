@@ -1,0 +1,6 @@
+-- Documentation only: tables are created and seeded lazily by worker.js (ensurePc) on first open of the page.
+-- reg_pc_limits   : benzoate/sorbate ceilings per food category (Ministry of Public Health Notification 468 B.E.2568)
+-- reg_pc_sodium   : sodium mg/100 g per weigh-sheet ingredient name, with status MISSING/ESTIMATE/COA/CALC
+-- reg_pc_lines    : weighed raw material per product (weigh sheet summary 2026-10-16)
+-- reg_pc_product  : category + finished weight per batch per product
+-- reg_pc_settings : acid conversion factors and low-sodium threshold
