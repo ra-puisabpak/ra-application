@@ -1,0 +1,3 @@
+-- Documentation only: reg_watch is created and seeded lazily by worker.js (ensureWatch).
+-- reg_watch: laws / draft notifications, status, dates, impacts (JSON [{t,d,by,at}]) per item.
+-- Data changes applied 2026-10-18: RM-053 allergen_group += งา (Sesame); ra_label_release_checklist rows 16 (งา) and 17 (ซัลไฟต์) for draft MoPH 474.
