@@ -1,0 +1,2 @@
+-- Documentation only: reg_reloc_items / reg_reloc_settings are created and seeded lazily by worker.js (ensureReloc)
+-- on first open of the "ย้ายฐานผลิต" page. Tasks (kind TASK) + one row per regProducts record (kind PRODUCT).
